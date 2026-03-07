@@ -1,0 +1,53 @@
+{
+  "name": "Free API Gateway Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/free/gateway",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_Free_Api_Gateway",
+      "name": "webhook-free-api-gateway",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_free_api_gateway.sh \"{{$json.query && $json.query.api ? $json.query.api : ($json.body && $json.body.api ? $json.body.api : 'joke')}}\" \"{{$json.query && $json.query.p1 ? $json.query.p1 : ($json.body && $json.body.p1 ? $json.body.p1 : '')}}\" \"{{$json.query && $json.query.p2 ? $json.query.p2 : ($json.body && $json.body.p2 ? $json.body.p2 : '')}}\""
+      },
+      "id": "Execute_Free_Api_Gateway",
+      "name": "Fetch Free API Gateway",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-free-api-gateway": {
+      "main": [
+        [
+          {
+            "node": "Fetch Free API Gateway",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}
