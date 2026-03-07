@@ -17,42 +17,31 @@
       "name": "cron-btc-features-15m",
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
-      "position": [
-        280,
-        300
-      ]
+      "position": [280, 300]
     },
     {
       "parameters": {
-        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_build_features.sh BTCUSD 5m 96"
+        "method": "POST",
+        "url": "http://strategy_service:8100/features/build",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"symbol\": \"BTCUSD\",\n  \"timeframe\": \"5m\",\n  \"lookback\": 96\n}",
+        "options": {}
       },
-      "id": "Exec_BTC_Features_15m",
+      "id": "Http_Features_Build",
       "name": "Build Features",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [
-        560,
-        300
-      ]
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 300]
     }
   ],
   "connections": {
     "cron-btc-features-15m": {
-      "main": [
-        [
-          {
-            "node": "Build Features",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Build Features", "type": "main", "index": 0 }]]
     }
   },
   "settings": {},
   "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
+  "meta": { "templateCredsSetupCompleted": true },
   "active": false
 }

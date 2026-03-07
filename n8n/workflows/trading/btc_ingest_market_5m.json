@@ -17,42 +17,45 @@
       "name": "cron-btc-ingest-5m",
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
-      "position": [
-        280,
-        300
-      ]
+      "position": [280, 300]
     },
     {
       "parameters": {
-        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_ingest_market.sh"
+        "url": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_vol=true",
+        "options": {}
       },
-      "id": "Exec_BTC_Ingest_5m",
-      "name": "Run BTC Ingest",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [
-        560,
-        300
-      ]
+      "id": "Http_CoinGecko_BTC",
+      "name": "Fetch BTC Price",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/ingest/market",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"source\": \"coingecko\",\n  \"symbol\": \"BTCUSD\",\n  \"timeframe\": \"5m\",\n  \"open\": {{$json.bitcoin.usd}},\n  \"high\": {{$json.bitcoin.usd}},\n  \"low\": {{$json.bitcoin.usd}},\n  \"close\": {{$json.bitcoin.usd}},\n  \"volume\": {{$json.bitcoin.usd_24h_vol || 0}},\n  \"raw\": {{$json}}\n}",
+        "options": {}
+      },
+      "id": "Http_Ingest_Market",
+      "name": "Ingest Market",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 300]
     }
   ],
   "connections": {
     "cron-btc-ingest-5m": {
-      "main": [
-        [
-          {
-            "node": "Run BTC Ingest",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Fetch BTC Price", "type": "main", "index": 0 }]]
+    },
+    "Fetch BTC Price": {
+      "main": [[{ "node": "Ingest Market", "type": "main", "index": 0 }]]
     }
   },
   "settings": {},
   "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
+  "meta": { "templateCredsSetupCompleted": true },
   "active": false
 }

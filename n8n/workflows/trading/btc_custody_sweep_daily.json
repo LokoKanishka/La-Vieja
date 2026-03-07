@@ -17,42 +17,31 @@
       "name": "cron-btc-sweep-daily",
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
-      "position": [
-        280,
-        300
-      ]
+      "position": [280, 300]
     },
     {
       "parameters": {
-        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_custody_sweep.sh 0.01"
+        "method": "POST",
+        "url": "http://strategy_service:8100/custody/sweep",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"min_sweep_btc\": 0.01\n}",
+        "options": {}
       },
-      "id": "Exec_BTC_Sweep_Daily",
+      "id": "Http_Custody_Sweep",
       "name": "Custody Sweep",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [
-        560,
-        300
-      ]
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300]
     }
   ],
   "connections": {
     "cron-btc-sweep-daily": {
-      "main": [
-        [
-          {
-            "node": "Custody Sweep",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Custody Sweep", "type": "main", "index": 0 }]]
     }
   },
   "settings": {},
   "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
+  "meta": { "templateCredsSetupCompleted": true },
   "active": false
 }
