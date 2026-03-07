@@ -132,7 +132,74 @@ case "${api}" in
   jikan_top_anime)
     fetch_url "https://api.jikan.moe/v4/top/anime?limit=3"
     ;;
+  kanye)
+    fetch_url "https://api.kanye.rest"
+    ;;
+  official_joke)
+    fetch_url "https://official-joke-api.appspot.com/random_joke"
+    ;;
+  randomfox)
+    fetch_url "https://randomfox.ca/floof/"
+    ;;
+  meowfacts)
+    fetch_url "https://meowfacts.herokuapp.com/"
+    ;;
+  mempool_fees)
+    fetch_url "https://mempool.space/api/v1/fees/recommended"
+    ;;
+  ipapi_is)
+    fetch_url "https://api.ipapi.is/"
+    ;;
+  nager_holidays)
+    year="${p1:-2026}"
+    country="${p2:-US}"
+    fetch_url "https://date.nager.at/api/v3/PublicHolidays/${year}/${country}"
+    ;;
+  sunrise_sunset)
+    lat="${p1:--34.6037}"
+    lon="${p2:--58.3816}"
+    fetch_url "https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lon}&formatted=0"
+    ;;
+  tvmaze_search)
+    query="${p1:-office}"
+    fetch_url "https://api.tvmaze.com/search/shows?q=${query}"
+    ;;
+  opentdb)
+    fetch_url "https://opentdb.com/api.php?amount=1&type=multiple"
+    ;;
+  artic_artworks)
+    fetch_url "https://api.artic.edu/api/v1/artworks?page=1&limit=1"
+    ;;
+  openf1_drivers)
+    fetch_url "https://api.openf1.org/v1/drivers?session_key=latest"
+    ;;
+  random_word)
+    fetch_url "https://random-word-api.herokuapp.com/word?number=1"
+    ;;
+  bible_verse)
+    verse="${p1:-john+3:16}"
+    fetch_url "https://bible-api.com/${verse}"
+    ;;
+  github_zen)
+    fetch_url "https://api.github.com/zen"
+    ;;
+  httpbin_uuid)
+    fetch_url "https://httpbin.org/uuid"
+    ;;
+  sample_coffee)
+    fetch_url "https://api.sampleapis.com/coffee/hot"
+    ;;
+  nhtsa_makes)
+    fetch_url "https://vpic.nhtsa.dot.gov/api/vehicles/GetMakesForVehicleType/car?format=json"
+    ;;
+  nasa_apod)
+    fetch_url "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY"
+    ;;
+  openalex)
+    query="${p1:-ai}"
+    fetch_url "https://api.openalex.org/works?search=${query}&per-page=3"
+    ;;
   *)
-    echo "{\"error\":\"unsupported_api\",\"api\":\"${api}\",\"supported\":[\"joke\",\"catfact\",\"dogimage\",\"agify\",\"genderize\",\"nationalize\",\"university\",\"openlibrary\",\"randomuser\",\"coingecko\",\"frankfurter\",\"spacex_latest\",\"github_status\",\"hn_topstories\",\"chucknorris\",\"advice\",\"yesno\",\"deck_draw\",\"restcountries\",\"pokeapi\",\"swapi_people\",\"openbrewery\",\"dictionary\",\"ipify\",\"worldtime\",\"jsonplaceholder_todo\",\"github_repo\",\"open_er\",\"jikan_top_anime\"]}"
+    echo "{\"error\":\"unsupported_api\",\"api\":\"${api}\",\"hint\":\"revisar n8n/docs/FREE_API_GATEWAY.md\"}"
     ;;
 esac
