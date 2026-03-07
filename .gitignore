@@ -1,0 +1,13 @@
+.mcp-venv/
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+*.tmp
+.env
+
+# n8n runtime data (db, logs, volatile state)
+n8n/data/
+
+# editor/system noise
+.DS_Store

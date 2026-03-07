@@ -1,0 +1,85 @@
+{
+  "name": "Memory Recent Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "memory/recent",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_Memory_Recent",
+      "name": "webhook-memory-recent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "days",
+              "value": "={{ $json.query.days || $json.body.days || '2' }}"
+            }
+          ]
+        }
+      },
+      "id": "Set_Normalize_Memory_Recent",
+      "name": "Normalize Days",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_memory_recent.sh \"{{$json.days}}\""
+      },
+      "id": "Execute_Command_Memory_Recent",
+      "name": "Read Recent Memory",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-memory-recent": {
+      "main": [
+        [
+          {
+            "node": "Normalize Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Days": {
+      "main": [
+        [
+          {
+            "node": "Read Recent Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

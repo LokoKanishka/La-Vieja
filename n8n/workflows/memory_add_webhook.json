@@ -1,0 +1,93 @@
+{
+  "name": "Memory Add Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "memory/add",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_Memory_Add",
+      "name": "webhook-memory-add",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "summary",
+              "value": "={{ $json.body.summary || $json.summary || 'Sin resumen' }}"
+            },
+            {
+              "name": "details",
+              "value": "={{ $json.body.details || $json.details || '' }}"
+            },
+            {
+              "name": "tags",
+              "value": "={{ $json.body.tags || $json.tags || 'general' }}"
+            }
+          ]
+        }
+      },
+      "id": "Set_Normalize_Memory_Add",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_memory_add.sh \"{{$json.summary}}\" \"{{$json.details}}\" \"{{$json.tags}}\""
+      },
+      "id": "Execute_Command_Memory_Add",
+      "name": "Save Memory",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-memory-add": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Save Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}
