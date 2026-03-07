@@ -5,9 +5,11 @@ __pycache__/
 *.swp
 *.tmp
 .env
+n8n/.env.trading
 
 # n8n runtime data (db, logs, volatile state)
 n8n/data/
+n8n/postgres/
 
 # editor/system noise
 .DS_Store

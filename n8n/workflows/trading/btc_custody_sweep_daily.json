@@ -1,0 +1,58 @@
+{
+  "name": "BTC Custody Sweep Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 23,
+              "minute": 0
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Sweep_Daily",
+      "name": "cron-btc-sweep-daily",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_custody_sweep.sh 0.01"
+      },
+      "id": "Exec_BTC_Sweep_Daily",
+      "name": "Custody Sweep",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "cron-btc-sweep-daily": {
+      "main": [
+        [
+          {
+            "node": "Custody Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

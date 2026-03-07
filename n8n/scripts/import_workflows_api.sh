@@ -7,7 +7,7 @@ if [[ -z "${N8N_API_KEY:-}" ]]; then
 fi
 
 base_url="${N8N_BASE_URL:-http://127.0.0.1:5111/api/v1}"
-wf_dir="n8n/workflows"
+wf_dir="${WF_DIR:-n8n/workflows}"
 health_url="${N8N_HEALTH_URL:-http://127.0.0.1:5111}"
 replace_existing="${N8N_IMPORT_REPLACE:-true}"
 
@@ -93,7 +93,7 @@ while IFS= read -r -d '' wf_file; do
   import_one "${wf_file}"
   imported_names+=("${LAST_IMPORTED_NAME}")
   imported_count=$((imported_count + 1))
-done < <(find "${wf_dir}" -maxdepth 1 -type f -name '*.json' -print0 | sort -z)
+done < <(find "${wf_dir}" -type f -name '*.json' -print0 | sort -z)
 
 if [[ "${imported_count}" -eq 0 ]]; then
   echo "No hay workflows JSON para importar en ${wf_dir}" >&2

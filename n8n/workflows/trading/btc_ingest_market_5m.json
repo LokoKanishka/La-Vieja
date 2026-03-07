@@ -1,0 +1,58 @@
+{
+  "name": "BTC Ingest Market 5m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Ingest_5m",
+      "name": "cron-btc-ingest-5m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_ingest_market.sh"
+      },
+      "id": "Exec_BTC_Ingest_5m",
+      "name": "Run BTC Ingest",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "cron-btc-ingest-5m": {
+      "main": [
+        [
+          {
+            "node": "Run BTC Ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

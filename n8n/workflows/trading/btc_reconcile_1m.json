@@ -1,0 +1,56 @@
+{
+  "name": "BTC Reconcile 1m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Reconcile_1m",
+      "name": "cron-btc-reconcile-1m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_reconcile.sh"
+      },
+      "id": "Exec_BTC_Reconcile_1m",
+      "name": "Reconcile",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "cron-btc-reconcile-1m": {
+      "main": [
+        [
+          {
+            "node": "Reconcile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

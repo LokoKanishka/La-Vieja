@@ -1,0 +1,58 @@
+{
+  "name": "BTC Signal Risk Execute 15m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 15,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Signal_15m",
+      "name": "cron-btc-signal-15m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_signal_execute.sh BTCUSD"
+      },
+      "id": "Exec_BTC_Signal_15m",
+      "name": "Signal + Risk + Execute",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        620,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "cron-btc-signal-15m": {
+      "main": [
+        [
+          {
+            "node": "Signal + Risk + Execute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

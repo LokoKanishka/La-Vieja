@@ -28,6 +28,26 @@
 
 - Proyecto activo: banco de prueba de autonomia en maquina vieja con Codex + n8n.
 - n8n corre en Docker local en `http://127.0.0.1:5111` (compose en `n8n/docker-compose.yml`).
+- Nueva fase activa (BTC core): stack dedicado en `n8n/docker-compose.trading.yml` con:
+  - `postgres` (persistencia operacional)
+  - `strategy_service` (API de ingesta, features, señal, riesgo, ejecución, reconciliación, custodia)
+  - `n8n` conectado a Postgres y al servicio de estrategia
+- Servicio de estrategia: `n8n/trading_service/app.py`
+  - Modo `paper` para ejecución automática segura.
+  - Modo `live` disponible vía `ccxt` (requiere credenciales en `n8n/.env.trading`).
+  - Electrum integrado por RPC para custodia (`/electrum/balance`, `/electrum/rpc`), no como motor de matching.
+- Workflows de trading listos para importar en `n8n/workflows/trading/`:
+  - ingesta mercado 5m
+  - features 15m
+  - señal/riesgo/ejecución 15m
+  - reconcile 1m
+  - sweep de custodia diario
+- Scripts operativos nuevos:
+  - `n8n/scripts/trading_up.sh`
+  - `n8n/scripts/trading_down.sh`
+  - `n8n/scripts/import_trading_workflows_api.sh`
+- SQL inicial: `n8n/sql/init/001_trading_core.sql`
+- Documentación operativa: `n8n/docs/BTC_TRADING_STACK.md`
 - Memoria persistente disponible en:
   - `memory/index.jsonl`
   - `memory/YYYY/MM/YYYY-MM-DD.md`
@@ -42,3 +62,4 @@
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`
   3. Revisar webhooks activos: `./n8n/scripts/print_active_webhooks.sh`
   4. Probar memoria reciente por webhook: `curl "http://127.0.0.1:5111/webhook/memory/recent?days=1"`
+  5. Para fase BTC: `cp n8n/.env.trading.example n8n/.env.trading && sh n8n/scripts/trading_up.sh`

@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: btc_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-n8n}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-n8n}
+      POSTGRES_DB: ${POSTGRES_DB:-n8n}
+      TZ: ${TZ:-America/Sao_Paulo}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n} -d ${POSTGRES_DB:-n8n}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  strategy_service:
+    build:
+      context: ./trading_service
+    container_name: btc_strategy_service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-n8n}:${POSTGRES_PASSWORD:-n8n}@postgres:5432/${POSTGRES_DB:-n8n}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      FEATURE_SET_VERSION: ${FEATURE_SET_VERSION:-v1}
+      PAPER_EQUITY_USD: ${PAPER_EQUITY_USD:-10000}
+      MAX_POSITION_PCT: ${MAX_POSITION_PCT:-0.20}
+      MAX_ORDERS_PER_HOUR: ${MAX_ORDERS_PER_HOUR:-12}
+      DAILY_LOSS_LIMIT_USD: ${DAILY_LOSS_LIMIT_USD:-300}
+      TAKER_FEE_BPS: ${TAKER_FEE_BPS:-10}
+      VOLATILITY_CUTOFF: ${VOLATILITY_CUTOFF:-0.08}
+      EXCHANGE_ADAPTER: ${EXCHANGE_ADAPTER:-paper}
+      EXCHANGE_ID: ${EXCHANGE_ID:-kraken}
+      EXCHANGE_API_KEY: ${EXCHANGE_API_KEY:-}
+      EXCHANGE_API_SECRET: ${EXCHANGE_API_SECRET:-}
+      EXCHANGE_API_PASSPHRASE: ${EXCHANGE_API_PASSPHRASE:-}
+      EXCHANGE_SYMBOL: ${EXCHANGE_SYMBOL:-BTC/USD}
+      LIVE_ORDER_TYPE: ${LIVE_ORDER_TYPE:-market}
+      EXCHANGE_SANDBOX: ${EXCHANGE_SANDBOX:-false}
+      ENABLE_ELECTRUM_RPC: ${ENABLE_ELECTRUM_RPC:-false}
+      ELECTRUM_RPC_URL: ${ELECTRUM_RPC_URL:-http://127.0.0.1:7777}
+      ELECTRUM_RPC_USER: ${ELECTRUM_RPC_USER:-}
+      ELECTRUM_RPC_PASSWORD: ${ELECTRUM_RPC_PASSWORD:-}
+    ports:
+      - "${STRATEGY_PORT:-8100}:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n_trading
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5111}:5111"
+    environment:
+      N8N_PORT: 5111
+      N8N_HOST: 0.0.0.0
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_LOG_LEVEL: warn
+      N8N_ENABLE_COMMAND_NODE: "true"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 168
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-n8n}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-n8n}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-n8n}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-America/Sao_Paulo}
+      TZ: ${TZ:-America/Sao_Paulo}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me-now}
+      STRATEGY_BASE_URL: http://strategy_service:8100
+    volumes:
+      - ./data:/home/node/.n8n
+      - ${WORKSPACE_PATH:-/home/lucy/Escritorio/La Vieja}:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      strategy_service:
+        condition: service_started

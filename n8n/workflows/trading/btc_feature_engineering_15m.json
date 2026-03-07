@@ -1,0 +1,58 @@
+{
+  "name": "BTC Feature Engineering 15m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 15,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Features_15m",
+      "name": "cron-btc-features-15m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_btc_build_features.sh BTCUSD 5m 96"
+      },
+      "id": "Exec_BTC_Features_15m",
+      "name": "Build Features",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "cron-btc-features-15m": {
+      "main": [
+        [
+          {
+            "node": "Build Features",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}
