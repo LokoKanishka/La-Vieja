@@ -19,6 +19,11 @@
    - Solo pedir intervencion del usuario cuando sea inevitable: credenciales, claves/API, autenticaciones externas o limites tecnicos del entorno.
    - Motivo operativo: el usuario trabaja en paralelo y la maquina es lenta; minimizar interacciones mejora mucho el flujo y la productividad.
 
+4. **Politica de APIs y herramientas: cero pago / cero tarjeta**
+   - No usar servicios pagos ni trials que exijan tarjeta.
+   - Priorizar APIs gratuitas, open source o planes free sin metodo de pago.
+   - Mantener enfoque "cyberpunk": maxima autonomia tecnica con recursos libres.
+
 ## Reanudacion De Sesion (estado operativo)
 
 - Proyecto activo: banco de prueba de autonomia en maquina vieja con Codex + n8n.

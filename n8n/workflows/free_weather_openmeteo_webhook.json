@@ -1,0 +1,89 @@
+{
+  "name": "Free API Weather OpenMeteo",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/free/weather",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "Webhook_Free_Weather",
+      "name": "webhook-free-weather",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "lat",
+              "value": "={{ $json.query && $json.query.lat ? $json.query.lat : ($json.body && $json.body.lat ? $json.body.lat : '-34.6037') }}"
+            },
+            {
+              "name": "lon",
+              "value": "={{ $json.query && $json.query.lon ? $json.query.lon : ($json.body && $json.body.lon ? $json.body.lon : '-58.3816') }}"
+            }
+          ]
+        }
+      },
+      "id": "Set_Free_Weather_Inputs",
+      "name": "Normalize Coords",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/workspace\" && sh ./scripts/n8n_free_weather.sh \"{{$json.lat}}\" \"{{$json.lon}}\""
+      },
+      "id": "Http_Free_Weather",
+      "name": "Fetch OpenMeteo Curl",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-free-weather": {
+      "main": [
+        [
+          {
+            "node": "Normalize Coords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Coords": {
+      "main": [
+        [
+          {
+            "node": "Fetch OpenMeteo Curl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false
+}

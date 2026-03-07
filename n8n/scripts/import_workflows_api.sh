@@ -80,13 +80,32 @@ PY
     -H "Content-Type: application/json" \
     --data-binary "@${tmp_json}" >/dev/null
   rm -f "${tmp_json}"
+
+  LAST_IMPORTED_NAME="${name}"
 }
 
-import_one "${wf_dir}/memory_add_webhook.json"
-import_one "${wf_dir}/memory_find_webhook.json"
-import_one "${wf_dir}/memory_recent_webhook.json"
+shopt -s nullglob
+LAST_IMPORTED_NAME=""
+imported_count=0
+declare -a imported_names=()
 
-for name in "Memory Add Webhook" "Memory Find Webhook" "Memory Recent Webhook"; do
+while IFS= read -r -d '' wf_file; do
+  import_one "${wf_file}"
+  imported_names+=("${LAST_IMPORTED_NAME}")
+  imported_count=$((imported_count + 1))
+done < <(find "${wf_dir}" -maxdepth 1 -type f -name '*.json' -print0 | sort -z)
+
+if [[ "${imported_count}" -eq 0 ]]; then
+  echo "No hay workflows JSON para importar en ${wf_dir}" >&2
+  exit 1
+fi
+
+declare -A seen_names=()
+for name in "${imported_names[@]}"; do
+  if [[ -n "${seen_names[${name}]:-}" ]]; then
+    continue
+  fi
+  seen_names["${name}"]=1
   wid="$(curl -sS -f -G "${base_url}/workflows" \
     -H "X-N8N-API-KEY: ${N8N_API_KEY}" \
     --data-urlencode "limit=200" \
