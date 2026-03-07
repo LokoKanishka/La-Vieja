@@ -26,6 +26,21 @@ APIs disponibles hoy:
 - `spacex_latest`
 - `github_status`
 - `hn_topstories`
+- `chucknorris`
+- `advice`
+- `yesno`
+- `deck_draw`
+- `restcountries` (`p1=country`)
+- `pokeapi` (`p1=pokemon`)
+- `swapi_people` (`p1=id`)
+- `openbrewery` (`p1=city`)
+- `dictionary` (`p1=word`)
+- `ipify` (fuente: `httpbin /ip`)
+- `worldtime` (`p1=zone`, ejemplo `Etc/UTC`, fuente: `timeapi.io`)
+- `jsonplaceholder_todo` (`p1=id`)
+- `github_repo` (`p1=owner/repo`)
+- `open_er` (`p1=base_currency`)
+- `jikan_top_anime`
 
 Ejemplos:
 
@@ -33,3 +48,6 @@ Ejemplos:
 - `...?api=catfact`
 - `...?api=agify&p1=lucy`
 - `...?api=coingecko&p1=bitcoin&p2=usd`
+- `...?api=restcountries&p1=argentina`
+- `...?api=worldtime&p1=Etc/UTC`
+- `...?api=github_repo&p1=openai/openai-cookbook`
