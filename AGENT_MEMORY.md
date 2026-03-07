@@ -63,3 +63,20 @@
   3. Revisar webhooks activos: `./n8n/scripts/print_active_webhooks.sh`
   4. Probar memoria reciente por webhook: `curl "http://127.0.0.1:5111/webhook/memory/recent?days=1"`
   5. Para fase BTC: `cp n8n/.env.trading.example n8n/.env.trading && sh n8n/scripts/trading_up.sh`
+
+## Protocolo Automatico Al Recibir "hola"
+
+1. Leer contexto sin que el usuario lo pida:
+   - `AGENT_MEMORY.md`
+   - ultimas entradas de `memory/index.jsonl`
+   - nota del dia en `memory/YYYY/MM/YYYY-MM-DD.md`
+2. Auto-actualizar estado operativo:
+   - `git status --short`
+   - `git log --oneline -n 5`
+   - estado de contenedores (`docker ps`)
+3. Reportar resumen de estado y pendientes criticos en 1 mensaje corto.
+4. Si hay cambios pendientes relevantes, ejecutar flujo de cierre:
+   - actualizar memoria (`scripts/memory_add.sh`)
+   - `git add -A && git commit -m "<resumen>"`
+   - `git push origin main`
+5. Mantener este protocolo como comportamiento por defecto para proximas sesiones.
