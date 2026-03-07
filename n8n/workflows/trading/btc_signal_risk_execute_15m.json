@@ -25,7 +25,7 @@
         "url": "http://strategy_service:8100/signal/evaluate",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"symbol\": \"BTCUSD\"\n}",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\"} }}",
         "options": {}
       },
       "id": "Http_Signal_Evaluate",
@@ -40,7 +40,7 @@
         "url": "http://strategy_service:8100/execution/order",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"signal_id\": \"{{$json.signal_id}}\",\n  \"order_type\": \"market\"\n}",
+        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"order_type\":\"market\"} }}",
         "options": {}
       },
       "id": "Http_Execution_Order",

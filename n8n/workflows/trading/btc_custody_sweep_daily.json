@@ -25,7 +25,7 @@
         "url": "http://strategy_service:8100/custody/sweep",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"min_sweep_btc\": 0.01\n}",
+        "jsonBody": "={{ {\"min_sweep_btc\":0.01} }}",
         "options": {}
       },
       "id": "Http_Custody_Sweep",

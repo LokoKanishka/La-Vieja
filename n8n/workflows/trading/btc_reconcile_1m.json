@@ -23,7 +23,7 @@
         "url": "http://strategy_service:8100/reconcile",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={}",
+        "jsonBody": "={{ { } }}",
         "options": {}
       },
       "id": "Http_Reconcile",

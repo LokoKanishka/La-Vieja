@@ -25,7 +25,7 @@
         "url": "http://strategy_service:8100/features/build",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"symbol\": \"BTCUSD\",\n  \"timeframe\": \"5m\",\n  \"lookback\": 96\n}",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\",\"timeframe\":\"5m\",\"lookback\":96} }}",
         "options": {}
       },
       "id": "Http_Features_Build",

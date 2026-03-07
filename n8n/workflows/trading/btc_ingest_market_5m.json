@@ -21,7 +21,7 @@
     },
     {
       "parameters": {
-        "url": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_vol=true",
+        "url": "https://api.coinbase.com/v2/prices/BTC-USD/spot",
         "options": {}
       },
       "id": "Http_CoinGecko_BTC",
@@ -36,7 +36,7 @@
         "url": "http://strategy_service:8100/ingest/market",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"source\": \"coingecko\",\n  \"symbol\": \"BTCUSD\",\n  \"timeframe\": \"5m\",\n  \"open\": {{$json.bitcoin.usd}},\n  \"high\": {{$json.bitcoin.usd}},\n  \"low\": {{$json.bitcoin.usd}},\n  \"close\": {{$json.bitcoin.usd}},\n  \"volume\": {{$json.bitcoin.usd_24h_vol || 0}},\n  \"raw\": {{$json}}\n}",
+        "jsonBody": "={{ {\"source\":\"coinbase\",\"symbol\":\"BTCUSD\",\"timeframe\":\"5m\",\"open\":Number($json.data.amount),\"high\":Number($json.data.amount),\"low\":Number($json.data.amount),\"close\":Number($json.data.amount),\"volume\":0,\"raw\":$json} }}",
         "options": {}
       },
       "id": "Http_Ingest_Market",
