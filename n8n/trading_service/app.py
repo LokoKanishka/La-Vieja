@@ -109,6 +109,29 @@ class ExecutionOrderRequest(BaseModel):
     order_type: str = "market"
 
 
+class ExecutionIntentRequest(BaseModel):
+    signal_id: str
+    source: str = "n8n_no_kyc"
+    note: str | None = None
+
+
+class ExecutionIntentConfirmRequest(BaseModel):
+    intent_id: str
+    status: str
+    txid: str | None = None
+    fill_price: float | None = None
+    filled_qty: float | None = None
+    fee: float = 0.0
+    fee_asset: str = "USD"
+    confirmed_at: datetime | None = None
+    external_ref: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntentElectrumReconcileRequest(BaseModel):
+    limit: int = 25
+
+
 class SweepRequest(BaseModel):
     min_sweep_btc: float = 0.01
 
@@ -212,6 +235,41 @@ def bootstrap_runtime_schema() -> None:
               scorecard jsonb not null,
               criteria jsonb not null
             )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists external_execution_intents (
+              intent_id uuid primary key,
+              order_id uuid references orders(order_id),
+              signal_id uuid references signals(signal_id),
+              symbol text not null,
+              side text not null check (side in ('buy', 'sell')),
+              target_notional_usd numeric not null,
+              reference_price numeric not null,
+              expected_qty numeric not null,
+              status text not null check (status in ('open', 'filled', 'rejected', 'canceled', 'settled')),
+              source text not null default 'n8n_no_kyc',
+              txid text,
+              external_ref text,
+              notes text,
+              metadata jsonb not null default '{}'::jsonb,
+              created_at timestamptz not null default now(),
+              updated_at timestamptz not null default now(),
+              confirmed_at timestamptz
+            )
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_external_execution_intents_status_created
+            on external_execution_intents(status, created_at desc)
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_external_execution_intents_txid
+            on external_execution_intents(txid)
             """
         )
         cur.execute(
@@ -938,8 +996,29 @@ def insert_risk_event(cur: psycopg.Cursor, rule: str, severity: str, context: di
         insert into risk_events(id, ts, rule, severity, context)
         values(%s, now(), %s, %s, %s::jsonb)
         """,
-        (str(uuid.uuid4()), rule, severity, json.dumps(context)),
+        # Risk context may include UUID/datetime values from DB rows.
+        (str(uuid.uuid4()), rule, severity, json.dumps(context, default=str)),
     )
+
+
+def normalize_intent_status(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized in {"filled", "rejected", "canceled"}:
+        return normalized
+    raise HTTPException(status_code=400, detail="status debe ser filled|rejected|canceled")
+
+
+def electrum_best_receive_address() -> str | None:
+    if not ENABLE_ELECTRUM_RPC:
+        return None
+    for method in ("getunusedaddress", "getnewaddress"):
+        try:
+            result = electrum_rpc(method, [])
+            if isinstance(result, str) and result:
+                return result
+        except Exception:
+            continue
+    return None
 
 
 def normalize_order_status(status: str) -> str:
@@ -1419,6 +1498,424 @@ def set_kill_switch(req: KillSwitchSetRequest) -> dict[str, Any]:
         conn.commit()
 
     return {"ok": True, "kill_switch": kill_switch}
+
+
+@app.get("/execution/intents")
+def execution_intents(status: str | None = None, limit: int = 50) -> dict[str, Any]:
+    allowed = {"open", "filled", "rejected", "canceled", "settled"}
+    status_filter = None
+    if status is not None:
+        status_filter = status.strip().lower()
+        if status_filter not in allowed:
+            raise HTTPException(status_code=400, detail="status invalido")
+
+    cap = max(1, min(int(limit), 200))
+    with get_conn() as conn, conn.cursor() as cur:
+        if status_filter is None:
+            cur.execute(
+                """
+                select intent_id, order_id, signal_id, symbol, side, target_notional_usd,
+                       reference_price, expected_qty, status, source, txid, external_ref,
+                       notes, metadata, created_at, updated_at, confirmed_at
+                from external_execution_intents
+                order by created_at desc
+                limit %s
+                """,
+                (cap,),
+            )
+        else:
+            cur.execute(
+                """
+                select intent_id, order_id, signal_id, symbol, side, target_notional_usd,
+                       reference_price, expected_qty, status, source, txid, external_ref,
+                       notes, metadata, created_at, updated_at, confirmed_at
+                from external_execution_intents
+                where status = %s
+                order by created_at desc
+                limit %s
+                """,
+                (status_filter, cap),
+            )
+        rows = cur.fetchall()
+    return {"ok": True, "count": len(rows), "items": rows}
+
+
+@app.post("/execution/intent")
+def execution_intent(req: ExecutionIntentRequest) -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select signal_id, symbol, action, target_notional_usd, ts
+            from signals
+            where signal_id = %s
+            """,
+            (req.signal_id,),
+        )
+        signal = cur.fetchone()
+        if not signal:
+            raise HTTPException(status_code=404, detail="signal_id no encontrado")
+
+        action = str(signal["action"])
+        symbol = str(signal["symbol"])
+        target_notional = float(signal["target_notional_usd"])
+        signal_ts = signal["ts"]
+
+        if action not in {"buy", "sell"}:
+            return {
+                "ok": True,
+                "created": False,
+                "status": "skipped",
+                "reason": "accion_no_ejecutable",
+                "signal_id": req.signal_id,
+                "action": action,
+            }
+
+        risk = evaluate_risk(cur, symbol, action, target_notional)
+        reference_price = latest_price(cur, symbol)
+        expected_qty = (target_notional / reference_price) if reference_price > 0 else 0.0
+
+        order_id = str(uuid.uuid4())
+        intent_id = str(uuid.uuid4())
+        receive_address = electrum_best_receive_address()
+
+        if not risk["approved"]:
+            cur.execute(
+                """
+                insert into orders(
+                    order_id, signal_id, venue, venue_order_id, symbol, side, type,
+                    qty, requested_notional_usd, status, metadata, created_at
+                )
+                values(%s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s::jsonb, %s)
+                """,
+                (
+                    order_id,
+                    req.signal_id,
+                    "external_no_kyc",
+                    f"intent-{order_id}",
+                    symbol,
+                    action,
+                    "manual",
+                    target_notional,
+                    "rejected",
+                    json.dumps({"risk": risk, "mode": "no_kyc_intent"}),
+                    signal_ts,
+                ),
+            )
+            insert_risk_event(
+                cur,
+                rule="execution_intent_blocked_by_risk",
+                severity="high",
+                context={"signal_id": req.signal_id, "risk": risk},
+            )
+            conn.commit()
+            return {
+                "ok": False,
+                "created": False,
+                "status": "rejected",
+                "signal_id": req.signal_id,
+                "risk": risk,
+            }
+
+        cur.execute(
+            """
+            insert into orders(
+                order_id, signal_id, venue, venue_order_id, symbol, side, type,
+                qty, requested_notional_usd, status, metadata, created_at
+            )
+            values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            """,
+            (
+                order_id,
+                req.signal_id,
+                "external_no_kyc",
+                f"intent-{order_id}",
+                symbol,
+                action,
+                "manual",
+                expected_qty,
+                target_notional,
+                "submitted",
+                json.dumps(
+                    {
+                        "mode": "no_kyc_intent",
+                        "reference_price": reference_price,
+                        "risk": risk,
+                        "receive_address": receive_address,
+                    }
+                ),
+                signal_ts,
+            ),
+        )
+
+        cur.execute(
+            """
+            insert into external_execution_intents(
+                intent_id, order_id, signal_id, symbol, side, target_notional_usd,
+                reference_price, expected_qty, status, source, notes, metadata, created_at, updated_at
+            )
+            values(%s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s, %s::jsonb, %s, %s)
+            """,
+            (
+                intent_id,
+                order_id,
+                req.signal_id,
+                symbol,
+                action,
+                target_notional,
+                reference_price,
+                expected_qty,
+                req.source,
+                req.note,
+                json.dumps({"risk": risk, "receive_address": receive_address}),
+                signal_ts,
+                signal_ts,
+            ),
+        )
+        conn.commit()
+
+    return {
+        "ok": True,
+        "created": True,
+        "intent_id": intent_id,
+        "order_id": order_id,
+        "signal_id": req.signal_id,
+        "symbol": symbol,
+        "side": action,
+        "target_notional_usd": round(target_notional, 4),
+        "reference_price": round(reference_price, 4),
+        "expected_qty": round(expected_qty, 8),
+        "receive_address_hint": receive_address,
+        "instructions": "Ejecutar trade no-KYC externamente y luego confirmar por /execution/intent/confirm",
+    }
+
+
+@app.post("/execution/intent/confirm")
+def execution_intent_confirm(req: ExecutionIntentConfirmRequest) -> dict[str, Any]:
+    status = normalize_intent_status(req.status)
+    confirmed_at = req.confirmed_at or utc_now()
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select i.intent_id, i.order_id, i.signal_id, i.symbol, i.side, i.target_notional_usd,
+                   i.reference_price, i.expected_qty, i.status as intent_status, i.txid,
+                   i.external_ref, i.metadata as intent_metadata,
+                   o.status as order_status, o.metadata as order_metadata
+            from external_execution_intents i
+            join orders o on o.order_id = i.order_id
+            where i.intent_id = %s
+            for update
+            """,
+            (req.intent_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="intent_id no encontrado")
+
+        intent_status = str(row["intent_status"])
+        if intent_status in {"filled", "rejected", "canceled", "settled"}:
+            return {"ok": True, "updated": False, "intent_id": req.intent_id, "status": intent_status}
+
+        order_metadata = dict(row["order_metadata"] or {})
+        intent_metadata = dict(row["intent_metadata"] or {})
+        order_metadata["confirmation"] = {
+            "status": status,
+            "txid": req.txid,
+            "external_ref": req.external_ref,
+            "confirmed_at": confirmed_at.isoformat(),
+            "metadata": req.metadata,
+        }
+        intent_metadata.update(req.metadata or {})
+
+        next_intent_status = status
+        next_order_status = status
+
+        if status == "filled":
+            side = str(row["side"])
+            symbol = str(row["symbol"])
+            fill_price = float(req.fill_price if req.fill_price is not None else row["reference_price"])
+            filled_qty = float(req.filled_qty if req.filled_qty is not None else row["expected_qty"])
+            fee = max(0.0, float(req.fee))
+            fee_asset = req.fee_asset or "USD"
+
+            if fill_price <= 0 or filled_qty <= 0:
+                raise HTTPException(status_code=400, detail="fill_price y filled_qty deben ser positivos")
+
+            cur.execute("select qty, avg_entry from positions where symbol = %s", (symbol,))
+            pos = cur.fetchone()
+            position_qty = float(pos["qty"]) if pos else 0.0
+            position_avg = float(pos["avg_entry"]) if pos else 0.0
+
+            tx_or_ref = req.txid or row["txid"] or f"intent-fill-{row['order_id']}"
+            realized_pnl = compute_realized_pnl(side, filled_qty, fill_price, fee, position_qty, position_avg)
+
+            cur.execute(
+                """
+                update orders
+                set status = 'filled',
+                    qty = %s,
+                    venue_order_id = %s,
+                    metadata = %s::jsonb,
+                    updated_at = %s
+                where order_id = %s
+                """,
+                (filled_qty, tx_or_ref, json.dumps(order_metadata), confirmed_at, row["order_id"]),
+            )
+            cur.execute(
+                """
+                insert into fills(fill_id, order_id, price, qty, fee, fee_asset, notional_usd, realized_pnl_usd, ts)
+                values(%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    row["order_id"],
+                    fill_price,
+                    filled_qty,
+                    fee,
+                    fee_asset,
+                    filled_qty * fill_price,
+                    realized_pnl,
+                    confirmed_at,
+                ),
+            )
+            update_position(cur, symbol, side, filled_qty, fill_price)
+            next_intent_status = "filled"
+            next_order_status = "filled"
+            insert_risk_event(
+                cur,
+                rule="no_kyc_intent_filled",
+                severity="info",
+                context={
+                    "intent_id": req.intent_id,
+                    "order_id": row["order_id"],
+                    "txid": req.txid,
+                    "fill_price": fill_price,
+                    "filled_qty": filled_qty,
+                },
+            )
+        else:
+            cur.execute(
+                """
+                update orders
+                set status = %s,
+                    metadata = %s::jsonb,
+                    updated_at = %s
+                where order_id = %s
+                """,
+                (next_order_status, json.dumps(order_metadata), confirmed_at, row["order_id"]),
+            )
+            insert_risk_event(
+                cur,
+                rule="no_kyc_intent_not_filled",
+                severity="high" if status == "rejected" else "info",
+                context={
+                    "intent_id": req.intent_id,
+                    "order_id": row["order_id"],
+                    "status": status,
+                    "txid": req.txid,
+                },
+            )
+
+        cur.execute(
+            """
+            update external_execution_intents
+            set status = %s,
+                txid = coalesce(%s, txid),
+                external_ref = coalesce(%s, external_ref),
+                metadata = %s::jsonb,
+                confirmed_at = %s,
+                updated_at = %s
+            where intent_id = %s
+            """,
+            (
+                next_intent_status,
+                req.txid,
+                req.external_ref,
+                json.dumps(intent_metadata),
+                confirmed_at,
+                confirmed_at,
+                req.intent_id,
+            ),
+        )
+        conn.commit()
+
+    return {
+        "ok": True,
+        "updated": True,
+        "intent_id": req.intent_id,
+        "status": next_intent_status,
+        "order_status": next_order_status,
+        "confirmed_at": confirmed_at.isoformat(),
+    }
+
+
+@app.post("/execution/intents/reconcile-electrum")
+def execution_intents_reconcile_electrum(req: IntentElectrumReconcileRequest) -> dict[str, Any]:
+    cap = max(1, min(int(req.limit), 200))
+    if not ENABLE_ELECTRUM_RPC:
+        return {"ok": False, "enabled": False, "detail": "Electrum RPC deshabilitado", "checked": 0, "updated": 0}
+
+    checked = 0
+    updated = 0
+    settled = 0
+    failures: list[dict[str, Any]] = []
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select intent_id, txid, status, metadata
+            from external_execution_intents
+            where txid is not null
+              and status in ('open', 'filled')
+            order by updated_at asc
+            limit %s
+            """,
+            (cap,),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            checked += 1
+            intent_id = str(row["intent_id"])
+            txid = str(row["txid"])
+            current_status = str(row["status"])
+            current_meta = dict(row["metadata"] or {})
+            try:
+                tx_data = electrum_rpc("gettransaction", [txid])
+                confirmations = None
+                if isinstance(tx_data, dict) and tx_data.get("confirmations") is not None:
+                    confirmations = int(tx_data["confirmations"])
+                current_meta["electrum_reconcile"] = {
+                    "last_check_at": utc_now().isoformat(),
+                    "confirmations": confirmations,
+                    "txid": txid,
+                }
+                new_status = current_status
+                if current_status == "filled" and confirmations is not None and confirmations > 0:
+                    new_status = "settled"
+                cur.execute(
+                    """
+                    update external_execution_intents
+                    set status = %s,
+                        metadata = %s::jsonb,
+                        updated_at = now()
+                    where intent_id = %s
+                    """,
+                    (new_status, json.dumps(current_meta), intent_id),
+                )
+                updated += 1
+                if new_status == "settled" and current_status != "settled":
+                    settled += 1
+            except Exception as exc:
+                failures.append({"intent_id": intent_id, "txid": txid, "error": str(exc)})
+        conn.commit()
+
+    return {
+        "ok": True,
+        "enabled": True,
+        "checked": checked,
+        "updated": updated,
+        "settled": settled,
+        "failures": failures[:20],
+    }
 
 
 @app.post("/execution/order")

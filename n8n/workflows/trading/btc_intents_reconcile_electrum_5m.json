@@ -1,0 +1,47 @@
+{
+  "name": "BTC Intents Reconcile Electrum 5m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Intents_Reconcile_Electrum_5m",
+      "name": "cron-btc-intents-reconcile-electrum-5m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [280, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/execution/intents/reconcile-electrum",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"limit\":25} }}",
+        "options": {}
+      },
+      "id": "Http_Reconcile_Intents_Electrum",
+      "name": "Reconcile Intents Electrum",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 300]
+    }
+  ],
+  "connections": {
+    "cron-btc-intents-reconcile-electrum-5m": {
+      "main": [[{ "node": "Reconcile Intents Electrum", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true },
+  "active": false
+}

@@ -7,6 +7,11 @@ Este modo evita entregar datos personales a exchanges centralizados.
 Operar el stack BTC en `paper` con datos reales de mercado y control de riesgo completo,
 sin credenciales de exchange y sin activacion `live`.
 
+En este modo, la ejecucion pasa por `intents` no-KYC:
+- `POST /execution/intent` crea una orden externa pendiente.
+- `POST /execution/intent/confirm` confirma resultado real (filled/rejected/canceled).
+- `POST /execution/intents/reconcile-electrum` revisa `txid` en Electrum y marca `settled` cuando confirma.
+
 ## Comandos
 
 1. Bloquear modo live y limpiar credenciales:
@@ -27,6 +32,22 @@ sh n8n/scripts/no_kyc_cycle.sh
 sh n8n/scripts/no_kyc_cron_install.sh
 ```
 
+4. Ver intents abiertos:
+
+```bash
+sh n8n/scripts/no_kyc_intents_open.sh 20
+```
+
+5. Confirmar resultado de un intent manual:
+
+```bash
+# filled
+sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> filled <fill_price> <filled_qty> [txid]
+
+# rejected o canceled
+sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> rejected
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`
@@ -43,3 +64,4 @@ sh n8n/scripts/no_kyc_cron_install.sh
 - Mantener seguimiento via:
   - `GET /ops/summary`
   - `POST /paper/go-no-go`
+  - `GET /execution/intents?status=open`

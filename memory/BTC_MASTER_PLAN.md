@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 02:18 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 03:00 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -10,7 +10,7 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
 ## 2) Estado Real Verificado (Hecho)
 
 - Infra activa: `n8n_trading`, `btc_postgres`, `btc_strategy_service` arriba y saludables.
-- Workflows BTC activos (7/7):
+- Workflows BTC activos (8/8):
   - BTC Ingest Market 5m
   - BTC Feature Engineering 15m
   - BTC Signal Risk Execute 15m
@@ -18,6 +18,7 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
   - BTC Custody Sweep Daily
   - BTC Ops Monitor 1m
   - BTC Paper Go No-Go Daily
+  - BTC Intents Reconcile Electrum 5m
 - Riesgo implementado:
   - Kill switch global persistente.
   - Daily loss hard (`DAILY_LOSS_LIMIT_USD`) con activacion automatica.
@@ -41,6 +42,12 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - `n8n/scripts/no_kyc_lockdown.sh`
     - `n8n/scripts/no_kyc_cycle.sh`
     - `n8n/docs/BTC_NO_KYC_MODE.md`
+  - Ejecucion externa NO-KYC por intents implementada:
+    - tabla `external_execution_intents`
+    - endpoints `POST /execution/intent`, `POST /execution/intent/confirm`, `GET /execution/intents`
+    - reconciliacion opcional con Electrum `POST /execution/intents/reconcile-electrum`
+    - scripts `n8n/scripts/no_kyc_intents_open.sh` y `n8n/scripts/no_kyc_intent_confirm.sh`
+    - fix de robustez: serializacion de eventos de riesgo con `json.dumps(..., default=str)` para evitar error UUID no serializable
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -48,10 +55,10 @@ Decision actual: `GO` (persistido en `paper_evaluations`).
 
 Metricas del ultimo `GO`:
 - `runtime_days`: 20.0 (>= 14)
-- `filled_orders`: 41 (>= 20)
-- `win_rate`: 0.6897 (>= 0.45)
-- `realized_pnl_usd`: 7.5682 (>= 0)
-- `rejection_rate`: 0.0238 (<= 0.30)
+- `filled_orders`: 42 (>= 20)
+- `win_rate`: 0.7000 (>= 0.45)
+- `realized_pnl_usd`: 9.3963 (>= 0)
+- `rejection_rate`: 0.0652 (<= 0.30)
 - `reconcile_uptime_pct`: 100.0 (>= 95)
 - `critical_ops_alerts_active`: 0 (<= 0)
 

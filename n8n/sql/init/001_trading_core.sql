@@ -160,3 +160,29 @@ create table if not exists paper_evaluations (
   scorecard jsonb not null,
   criteria jsonb not null
 );
+
+create table if not exists external_execution_intents (
+  intent_id uuid primary key,
+  order_id uuid references orders(order_id),
+  signal_id uuid references signals(signal_id),
+  symbol text not null,
+  side text not null check (side in ('buy', 'sell')),
+  target_notional_usd numeric not null,
+  reference_price numeric not null,
+  expected_qty numeric not null,
+  status text not null check (status in ('open', 'filled', 'rejected', 'canceled', 'settled')),
+  source text not null default 'n8n_no_kyc',
+  txid text,
+  external_ref text,
+  notes text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  confirmed_at timestamptz
+);
+
+create index if not exists idx_external_execution_intents_status_created
+  on external_execution_intents (status, created_at desc);
+
+create index if not exists idx_external_execution_intents_txid
+  on external_execution_intents (txid);

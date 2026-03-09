@@ -44,6 +44,7 @@ Workflows incluidos:
 - `BTC Custody Sweep Daily`
 - `BTC Ops Monitor 1m`
 - `BTC Paper Go No-Go Daily`
+- `BTC Intents Reconcile Electrum 5m`
 
 ## 3) Proceso automático
 
@@ -69,6 +70,10 @@ Workflows incluidos:
 - `GET /paper/scorecard`
 - `POST /paper/go-no-go`
 - `POST /execution/order`
+- `POST /execution/intent`
+- `POST /execution/intent/confirm`
+- `GET /execution/intents`
+- `POST /execution/intents/reconcile-electrum`
 - `POST /reconcile`
 - `POST /custody/sweep`
 - `GET /electrum/balance`

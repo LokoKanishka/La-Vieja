@@ -37,14 +37,14 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://strategy_service:8100/execution/order",
+        "url": "http://strategy_service:8100/execution/intent",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"order_type\":\"market\"} }}",
+        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"source\":\"n8n_no_kyc\"} }}",
         "options": {}
       },
       "id": "Http_Execution_Order",
-      "name": "Execute Order",
+      "name": "Create Intent",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [860, 300]
@@ -55,7 +55,7 @@
       "main": [[{ "node": "Evaluate Signal", "type": "main", "index": 0 }]]
     },
     "Evaluate Signal": {
-      "main": [[{ "node": "Execute Order", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Create Intent", "type": "main", "index": 0 }]]
     }
   },
   "settings": {},
