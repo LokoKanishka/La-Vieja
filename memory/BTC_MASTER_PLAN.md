@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 03:00 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 03:11 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -151,3 +151,4 @@ En cada sesion nueva:
 - Scorecard: `curl -s "http://127.0.0.1:8100/paper/scorecard?lookback_days=14"`
 - Go/No-Go: `curl -s -X POST http://127.0.0.1:8100/paper/go-no-go -H "Content-Type: application/json" -d '{"lookback_days":14,"persist":true}'`
 - Workflows activos BTC: `docker exec btc_postgres psql -U n8n -d n8n -At -F $'\t' -c "select name, active from workflow_entity where name like 'BTC %' order by name;"`
+- Test completo NO-KYC: `bash n8n/scripts/full_test_no_kyc.sh`

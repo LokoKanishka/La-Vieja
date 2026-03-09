@@ -48,6 +48,12 @@ sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> filled <fill_price> <filled_
 sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> rejected
 ```
 
+6. Test completo NO-KYC (1 comando):
+
+```bash
+bash n8n/scripts/full_test_no_kyc.sh
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`
