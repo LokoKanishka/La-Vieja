@@ -66,6 +66,7 @@ services:
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_LOG_LEVEL: warn
       N8N_ENABLE_COMMAND_NODE: "true"
+      NODES_EXCLUDE: ""
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE: 168
       DB_TYPE: postgresdb
