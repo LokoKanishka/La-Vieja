@@ -76,6 +76,11 @@
   - `docker-compose.trading.yml` ahora inyecta variables `forecast/hybrid` completas al `strategy_service`.
   - `POST /hybrid/ai/fallback` soporta `HYBRID_FALLBACK_POLICY=adaptive_edge` (selección por edge reciente).
   - Scorecards `forecast/hybrid` excluyen outliers con `FORECAST_MAX_ABS_CHANGE_BPS`.
+- Pendientes críticos actuales para la próxima sesión:
+  - Mantener `full_test_no_kyc.sh` en `failed=0`.
+  - Mantener `open_intents=0`.
+  - Llevar muestra híbrida forward a `decisions_with_outcome >= 80`.
+  - Confirmar quiebre a edge positivo; si no sucede, ajustar estrategia quant base.
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

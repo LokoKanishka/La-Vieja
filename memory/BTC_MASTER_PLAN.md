@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 05:31 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 05:40 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -205,3 +205,21 @@ En cada sesion nueva:
 - Backfill híbrido: `bash n8n/scripts/hybrid_backfill_shadow.sh 120`
 - Autocancel intents: `bash n8n/scripts/no_kyc_intents_autocancel.sh --all`
 - Reporte híbrido horario manual: `bash n8n/scripts/hybrid_hourly_report.sh`
+
+## 8) Puntos Claros Para Retomar (Proxima Sesion)
+
+1. Confirmar estado base (debe seguir igual):
+   - `failed=0` en `bash n8n/scripts/full_test_no_kyc.sh`
+   - `open_intents=0`
+   - `HYBRID_FALLBACK_POLICY=adaptive_edge` activo en runtime
+2. Ejecutar validacion forward (sin tocar reglas) por al menos 24h:
+   - mantener `BTC Hybrid Shadow 5m` y `BTC Hybrid Hourly Report 1h` activos
+   - revisar cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`
+3. Objetivo minimo de muestra para decidir siguiente ajuste:
+   - `decisions_with_outcome >= 80`
+   - `outlier_excluded` estable (sin crecer por fallas de datos)
+4. Criterio de decision tecnica al cerrar esa muestra:
+   - si `hybrid.avg_edge_bps > 0` y sube accuracy: mantener política actual
+   - si `hybrid.avg_edge_bps <= 0`: pasar a ajuste de estrategia quant (no solo fallback IA)
+5. Mantener regla de oro:
+   - no live, no KYC, no tarjeta, no APIs pagas en esta máquina.
