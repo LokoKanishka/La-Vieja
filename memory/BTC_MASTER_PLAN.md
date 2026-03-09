@@ -1,10 +1,11 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 02:11 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 02:18 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
-Llevar el stack BTC de `paper` a `live` con control de riesgo estricto, observabilidad completa y criterio go/no-go automatizado, manteniendo autonomia operativa con n8n + memoria persistente.
+Mantener el stack BTC con autonomia operativa maxima.  
+Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centralizado ni entrega de datos personales.
 
 ## 2) Estado Real Verificado (Hecho)
 
@@ -36,6 +37,10 @@ Llevar el stack BTC de `paper` a `live` con control de riesgo estricto, observab
   - Correccion de timestamps operativos: `signals/orders/fills` alineados a timestamp de mercado (`feature ts`) y no a `now()`.
   - Correccion `Memory Add Webhook` para persistencia robusta de `summary/details/tags`.
   - Script de replay historico agregado: `n8n/scripts/paper_replay_backfill.py`.
+  - Modo `NO-KYC` implementado:
+    - `n8n/scripts/no_kyc_lockdown.sh`
+    - `n8n/scripts/no_kyc_cycle.sh`
+    - `n8n/docs/BTC_NO_KYC_MODE.md`
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -55,6 +60,15 @@ Nota de trazabilidad:
 - Esto habilita avanzar a pre-live tecnico; no reemplaza validacion prolongada en paper con datos puramente organicos.
 
 ## 4) Plan Total Por Fases (Completo)
+
+### Fase 0 - No-KYC (activa)
+
+1. Bloquear cualquier paso a live por configuracion.
+   - Hecho cuando: `TRADING_MODE=paper`, `EXCHANGE_ADAPTER=paper`, credenciales vacias.
+2. Mantener ciclo operativo paper persistente.
+   - Hecho cuando: `no_kyc_cycle.sh` corre sin error y persiste alertas/go-no-go.
+3. Mejorar estrategia sin dependencia de exchange con KYC.
+   - Hecho cuando: scorecard estable y control de riesgo sano en paper.
 
 ### Fase A - Estabilizacion Paper (inmediata, 24-72h)
 
@@ -86,14 +100,14 @@ Nota de trazabilidad:
    - Acciones: procedimiento claro para kill switch, recovery y rollback.
    - Hecho cuando: runbook documentado y probado en simulacion.
 
-### Fase D - Pre-Live Tecnica (activa)
+### Fase D - Pre-Live Tecnica (opcional, pausada por politica NO-KYC)
 
 1. Adaptador firmado real de exchange (`ccxt`) en sandbox.
 2. Validacion de slippage y costo real de ejecucion.
 3. Pruebas de continuidad (reinicios, reconexion, latencia).
 4. Checklist final de seguridad y limites.
 
-Hecho cuando: todas las pruebas en sandbox pasan y se mantiene gobernanza de riesgo estable.
+Hecho cuando: el usuario decide salir de NO-KYC.
 
 ### Fase E - Activacion Live Minima (solo si GO)
 
@@ -103,16 +117,16 @@ Hecho cuando: todas las pruebas en sandbox pasan y se mantiene gobernanza de rie
 
 ## 5) Prioridad Operativa Actual
 
-Prioridad #1: ejecutar Fase D (pre-live tecnico) sin activar live real aun.
+Prioridad #1: sostener y mejorar `NO-KYC paper`.
 
 Orden de ejecucion inmediato:
-1. Adapter `ccxt` firmado en sandbox real del exchange objetivo.
-2. Validacion de slippage y latencia end-to-end con trazas.
-3. Runbook de incidentes + prueba controlada de kill switch.
-4. Checklist final de activacion live con capital minimo.
+1. Ejecutar `n8n/scripts/no_kyc_lockdown.sh` al inicio.
+2. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
+3. Mantener optimizacion de señal/riesgo en paper.
+4. Persistir estado y cambios en memoria n8n + git.
 
-Bloqueos actuales detectados (02:12):
-- `EXCHANGE_ADAPTER` aun no esta en `ccxt`.
+Bloqueos de pre-live (irrelevantes mientras NO-KYC siga activo):
+- `EXCHANGE_ADAPTER` no esta en `ccxt`.
 - Faltan `EXCHANGE_API_KEY` y `EXCHANGE_API_SECRET`.
 - `EXCHANGE_SANDBOX` no esta en `true`.
 
