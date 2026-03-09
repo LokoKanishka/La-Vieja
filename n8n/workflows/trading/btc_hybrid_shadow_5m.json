@@ -52,17 +52,47 @@
     {
       "parameters": {
         "method": "POST",
+        "url": "={{ $env.MOLBOT_WEBHOOK_URL ? $env.MOLBOT_WEBHOOK_URL : \"http://strategy_service:8100/hybrid/ai/fallback\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"symbol\":\"BTCUSD\",\"quant_action\":$json.action,\"quant_confidence\":$json.confidence,\"reason\":$json.reason,\"context\":{\"source\":\"n8n_hybrid_shadow_5m\"}} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_AI",
+      "name": "Ask Molbot AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
         "url": "http://strategy_service:8100/hybrid/decision",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"mode\":\"shadow\",\"ai_source\":\"pending_molbot\",\"ai_model\":\"unset\",\"metadata\":{\"source\":\"n8n_hybrid_shadow_5m\"}} }}",
+        "jsonBody": "={{ {\"signal_id\":$node[\"Evaluate Signal 5m\"].json.signal_id,\"mode\":\"shadow\",\"ai_action\":$json.ai_action,\"ai_confidence\":$json.ai_confidence,\"ai_reason\":$json.ai_reason,\"ai_model\":$json.ai_model,\"ai_source\":($json.ai_source || \"molbot\"),\"attach_forecast\":true,\"forecast_horizon_minutes\":10,\"forecast_min_move_bps\":5,\"forecast_timeframe\":\"5m\",\"metadata\":{\"source\":\"n8n_hybrid_shadow_5m\"}} }}",
         "options": {}
       },
       "id": "Http_Hybrid_Decision",
       "name": "Hybrid Decision Shadow",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1060, 300]
+      "position": [1330, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/forecast/evaluate-due",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"limit\":300,\"max_resolution_lag_minutes\":20,\"persist_events\":true} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Evaluate_Due",
+      "name": "Evaluate Due Forecasts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 300]
     },
     {
       "parameters": {
@@ -74,7 +104,22 @@
       "name": "Hybrid Scorecard 7d",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1350, 300]
+      "position": [1870, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/hybrid/alerts/evaluate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"lookback_days\":7,\"mode\":\"shadow\",\"horizon_minutes\":10,\"timeframe\":\"5m\",\"persist\":true,\"include_scorecard\":false} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Alerts",
+      "name": "Hybrid Alerts Evaluate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2140, 300]
     }
   ],
   "connections": {
@@ -85,10 +130,19 @@
       "main": [[{ "node": "Evaluate Signal 5m", "type": "main", "index": 0 }]]
     },
     "Evaluate Signal 5m": {
+      "main": [[{ "node": "Ask Molbot AI", "type": "main", "index": 0 }]]
+    },
+    "Ask Molbot AI": {
       "main": [[{ "node": "Hybrid Decision Shadow", "type": "main", "index": 0 }]]
     },
     "Hybrid Decision Shadow": {
+      "main": [[{ "node": "Evaluate Due Forecasts", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Due Forecasts": {
       "main": [[{ "node": "Hybrid Scorecard 7d", "type": "main", "index": 0 }]]
+    },
+    "Hybrid Scorecard 7d": {
+      "main": [[{ "node": "Hybrid Alerts Evaluate", "type": "main", "index": 0 }]]
     }
   },
   "settings": {},

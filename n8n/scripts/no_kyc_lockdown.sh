@@ -24,6 +24,9 @@ upsert_env "EXCHANGE_ADAPTER" "paper"
 upsert_env "EXCHANGE_SANDBOX" "false"
 upsert_env "HYBRID_MODE" "shadow"
 upsert_env "HYBRID_REQUIRE_AI_AGREEMENT" "true"
+upsert_env "HYBRID_ALERT_MIN_RESOLVED" "20"
+upsert_env "HYBRID_ALERT_MIN_ACCURACY" "0.55"
+upsert_env "HYBRID_ALERT_MIN_EDGE_BPS" "0"
 for key in \
   EXCHANGE_API_KEY \
   EXCHANGE_API_SECRET \

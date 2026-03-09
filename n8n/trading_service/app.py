@@ -54,6 +54,9 @@ HYBRID_MODE = os.getenv("HYBRID_MODE", "shadow").lower()
 HYBRID_REQUIRE_AI_AGREEMENT = os.getenv("HYBRID_REQUIRE_AI_AGREEMENT", "true").lower() == "true"
 HYBRID_AI_MIN_CONFIDENCE = float(os.getenv("HYBRID_AI_MIN_CONFIDENCE", "0.60"))
 HYBRID_QUANT_MIN_CONFIDENCE = float(os.getenv("HYBRID_QUANT_MIN_CONFIDENCE", "0.10"))
+HYBRID_ALERT_MIN_RESOLVED = int(os.getenv("HYBRID_ALERT_MIN_RESOLVED", "20"))
+HYBRID_ALERT_MIN_ACCURACY = float(os.getenv("HYBRID_ALERT_MIN_ACCURACY", "0.55"))
+HYBRID_ALERT_MIN_EDGE_BPS = float(os.getenv("HYBRID_ALERT_MIN_EDGE_BPS", "0"))
 
 EXCHANGE_ADAPTER = os.getenv("EXCHANGE_ADAPTER", "paper").lower()
 EXCHANGE_ID = os.getenv("EXCHANGE_ID", "kraken")
@@ -188,7 +191,29 @@ class HybridDecisionRequest(BaseModel):
     ai_model: str = "unset"
     ai_source: str = "pending_molbot"
     mode: str = HYBRID_MODE
+    attach_forecast: bool = True
+    forecast_horizon_minutes: int = FORECAST_DEFAULT_HORIZON_MINUTES
+    forecast_min_move_bps: float = FORECAST_MIN_MOVE_BPS
+    forecast_timeframe: str = MONITORED_TIMEFRAME
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridAiFallbackRequest(BaseModel):
+    signal_id: str
+    symbol: str = MONITORED_SYMBOL
+    quant_action: str = "hold"
+    quant_confidence: float = 0.0
+    reason: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridAlertEvaluateRequest(BaseModel):
+    lookback_days: int = 7
+    mode: str = HYBRID_MODE
+    horizon_minutes: int = FORECAST_DEFAULT_HORIZON_MINUTES
+    timeframe: str = MONITORED_TIMEFRAME
+    persist: bool = True
+    include_scorecard: bool = False
 
 
 def utc_now() -> datetime:
@@ -1369,6 +1394,60 @@ def build_hybrid_scorecard(
     }
 
 
+def build_hybrid_alerts(scorecard: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    resolved = int(scorecard.get("hybrid", {}).get("resolved") or 0)
+    accuracy = scorecard.get("hybrid", {}).get("accuracy")
+    avg_edge_bps = scorecard.get("hybrid", {}).get("avg_edge_bps")
+
+    if resolved < HYBRID_ALERT_MIN_RESOLVED:
+        alerts.append(
+            {
+                "key": "hybrid_sample_low",
+                "level": "warning",
+                "message": f"Muestra híbrida insuficiente: {resolved} < {HYBRID_ALERT_MIN_RESOLVED}",
+                "context": {
+                    "resolved": resolved,
+                    "required": HYBRID_ALERT_MIN_RESOLVED,
+                    "filters": scorecard.get("filters", {}),
+                },
+            }
+        )
+        return alerts
+
+    if accuracy is None or float(accuracy) < HYBRID_ALERT_MIN_ACCURACY:
+        alerts.append(
+            {
+                "key": "hybrid_accuracy_low",
+                "level": "critical",
+                "message": f"Accuracy híbrida baja: {accuracy}",
+                "context": {
+                    "accuracy": accuracy,
+                    "min_accuracy": HYBRID_ALERT_MIN_ACCURACY,
+                    "resolved": resolved,
+                    "filters": scorecard.get("filters", {}),
+                },
+            }
+        )
+
+    if avg_edge_bps is None or float(avg_edge_bps) <= HYBRID_ALERT_MIN_EDGE_BPS:
+        alerts.append(
+            {
+                "key": "hybrid_edge_nonpositive",
+                "level": "critical",
+                "message": f"Edge híbrido no positivo: {avg_edge_bps}",
+                "context": {
+                    "avg_edge_bps": avg_edge_bps,
+                    "min_edge_bps": HYBRID_ALERT_MIN_EDGE_BPS,
+                    "resolved": resolved,
+                    "filters": scorecard.get("filters", {}),
+                },
+            }
+        )
+
+    return alerts
+
+
 def electrum_best_receive_address() -> str | None:
     if not ENABLE_ELECTRUM_RPC:
         return None
@@ -2039,6 +2118,7 @@ def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
     mode = normalize_hybrid_mode(req.mode)
     ai_source = (req.ai_source or "").strip() or "pending_molbot"
     ai_model = (req.ai_model or "").strip() or "unset"
+    forecast_linked: dict[str, Any] | None = None
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -2069,6 +2149,97 @@ def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
             "ai_min_confidence": HYBRID_AI_MIN_CONFIDENCE,
             "quant_min_confidence": HYBRID_QUANT_MIN_CONFIDENCE,
         }
+
+        if req.attach_forecast:
+            horizon = int(req.forecast_horizon_minutes)
+            min_move_bps = float(req.forecast_min_move_bps)
+            timeframe = (req.forecast_timeframe or "").strip() or MONITORED_TIMEFRAME
+            if horizon < 1 or horizon > 120:
+                raise HTTPException(status_code=400, detail="forecast_horizon_minutes debe estar entre 1 y 120")
+            if min_move_bps < 0 or min_move_bps > 1000:
+                raise HTTPException(status_code=400, detail="forecast_min_move_bps fuera de rango (0..1000)")
+
+            cur.execute(
+                """
+                select close
+                from market_candles
+                where symbol = %s
+                  and timeframe = %s
+                  and ts <= %s
+                order by ts desc
+                limit 1
+                """,
+                (symbol, timeframe, signal_ts),
+            )
+            candle = cur.fetchone()
+            if candle:
+                entry_price = float(candle["close"])
+                due_ts = signal_ts + timedelta(minutes=horizon)
+                forecast_id = str(uuid.uuid4())
+                forecast_meta = {
+                    "source": "hybrid_decision",
+                    "mode": mode,
+                    "ai_source": ai_source,
+                    "decision_reason": reason,
+                }
+                cur.execute(
+                    """
+                    insert into forecast_checks(
+                        forecast_id, signal_id, signal_ts, symbol, timeframe, predicted_action, predicted_confidence,
+                        horizon_minutes, min_move_bps, entry_price, due_ts, outcome, metadata, created_at, updated_at
+                    )
+                    values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s::jsonb, now(), now())
+                    on conflict(signal_id, timeframe, horizon_minutes) do nothing
+                    returning forecast_id, due_ts
+                    """,
+                    (
+                        forecast_id,
+                        req.signal_id,
+                        signal_ts,
+                        symbol,
+                        timeframe,
+                        quant_action,
+                        quant_confidence,
+                        horizon,
+                        min_move_bps,
+                        entry_price,
+                        due_ts,
+                        json.dumps(forecast_meta),
+                    ),
+                )
+                inserted_forecast = cur.fetchone()
+                if inserted_forecast:
+                    forecast_linked = {
+                        "created": True,
+                        "forecast_id": str(inserted_forecast["forecast_id"]),
+                        "timeframe": timeframe,
+                        "horizon_minutes": horizon,
+                        "due_ts": inserted_forecast["due_ts"].isoformat(),
+                    }
+                else:
+                    cur.execute(
+                        """
+                        select forecast_id, due_ts, outcome
+                        from forecast_checks
+                        where signal_id = %s
+                          and timeframe = %s
+                          and horizon_minutes = %s
+                        limit 1
+                        """,
+                        (req.signal_id, timeframe, horizon),
+                    )
+                    existing_forecast = cur.fetchone()
+                    if existing_forecast:
+                        forecast_linked = {
+                            "created": False,
+                            "forecast_id": str(existing_forecast["forecast_id"]),
+                            "timeframe": timeframe,
+                            "horizon_minutes": horizon,
+                            "due_ts": existing_forecast["due_ts"].isoformat(),
+                            "status": str(existing_forecast["outcome"]),
+                        }
+            else:
+                forecast_linked = {"created": False, "detail": "no_hay_vela_para_signal_ts"}
 
         cur.execute(
             """
@@ -2134,6 +2305,7 @@ def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
         "ai": {"action": ai_action, "confidence": round(ai_confidence, 4), "source": ai_source, "model": ai_model},
         "agreement": agreement,
         "hybrid": {"action": hybrid_action, "confidence": round(hybrid_confidence, 4), "reason": reason},
+        "forecast_linked": forecast_linked,
         "execution": "shadow_only" if mode == "shadow" else "manual_gate_required",
     }
 
@@ -2183,6 +2355,60 @@ def hybrid_scorecard(
         scorecard = build_hybrid_scorecard(cur, lookback_days, horizon_minutes, tf, selected_mode)
 
     return {"ok": True, "scorecard": scorecard}
+
+
+@app.post("/hybrid/ai/fallback")
+def hybrid_ai_fallback(req: HybridAiFallbackRequest) -> dict[str, Any]:
+    quant_action = normalize_trade_action(req.quant_action)
+    quant_confidence = max(0.0, min(0.99, float(req.quant_confidence)))
+    ai_action = quant_action
+    ai_confidence = max(0.55, quant_confidence)
+    ai_reason = "fallback_rule_same_as_quant"
+    if quant_action == "hold":
+        ai_confidence = max(0.55, quant_confidence)
+        ai_reason = "fallback_hold_no_external_ai"
+
+    return {
+        "ok": True,
+        "signal_id": req.signal_id,
+        "ai_action": ai_action,
+        "ai_confidence": round(ai_confidence, 4),
+        "ai_reason": ai_reason,
+        "ai_model": "strategy_fallback_rule",
+        "ai_source": "strategy_fallback",
+    }
+
+
+@app.post("/hybrid/alerts/evaluate")
+def hybrid_alerts_evaluate(req: HybridAlertEvaluateRequest) -> dict[str, Any]:
+    if req.lookback_days < 1 or req.lookback_days > 120:
+        raise HTTPException(status_code=400, detail="lookback_days debe estar entre 1 y 120")
+    selected_mode = normalize_hybrid_mode(req.mode)
+    horizon = int(req.horizon_minutes)
+    if horizon < 1 or horizon > 120:
+        raise HTTPException(status_code=400, detail="horizon_minutes debe estar entre 1 y 120")
+    timeframe = (req.timeframe or "").strip() or MONITORED_TIMEFRAME
+
+    with get_conn() as conn, conn.cursor() as cur:
+        scorecard = build_hybrid_scorecard(cur, req.lookback_days, horizon, timeframe, selected_mode)
+        alerts = build_hybrid_alerts(scorecard)
+        persisted: list[dict[str, Any]] = []
+        if req.persist and alerts:
+            persisted = persist_ops_alerts(cur, alerts)
+            conn.commit()
+
+    critical_count = sum(1 for a in alerts if a["level"] == "critical")
+    warning_count = sum(1 for a in alerts if a["level"] == "warning")
+    return {
+        "ok": True,
+        "evaluated_at": utc_now().isoformat(),
+        "alert_count": len(alerts),
+        "critical_count": critical_count,
+        "warning_count": warning_count,
+        "persisted_count": len(persisted),
+        "alerts": alerts,
+        "scorecard": scorecard if req.include_scorecard else None,
+    }
 
 
 @app.post("/risk/check")

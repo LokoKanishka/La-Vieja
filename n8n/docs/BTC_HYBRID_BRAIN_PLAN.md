@@ -27,11 +27,16 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
    - `GET /hybrid/decisions`
    - `GET /hybrid/scorecard`
 3. Workflow `BTC Hybrid Shadow 5m`:
-   - build features -> evaluate signal -> hybrid decision (sin IA real todavía) -> hybrid scorecard.
+   - build features -> evaluate signal -> consulta IA (`MOLBOT_WEBHOOK_URL` o fallback) -> hybrid decision -> evaluate due -> scorecard -> alerts.
+4. Workflow `BTC Hybrid Hourly Report 1h`:
+   - scorecard híbrido + evaluación de alertas + score forecast.
 4. Scripts:
    - `n8n/scripts/hybrid_shadow_tick.sh`
    - `n8n/scripts/hybrid_scorecard.sh`
-5. `no_kyc_cycle.sh` y `full_test_no_kyc.sh` incluyen validación híbrida.
+   - `n8n/scripts/hybrid_backfill_shadow.sh`
+   - `n8n/scripts/hybrid_hourly_report.sh`
+   - `n8n/scripts/no_kyc_intents_autocancel.sh`
+5. `no_kyc_cycle.sh` y `full_test_no_kyc.sh` incluyen score y alertas híbridas.
 
 ## Política De Decisión Híbrida (actual)
 
@@ -44,15 +49,17 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
    - `HYBRID_AI_MIN_CONFIDENCE`
    - `HYBRID_QUANT_MIN_CONFIDENCE`
 
-## Fase Siguiente (conectar Molbot real)
+## Contrato Molbot
 
-1. En n8n, insertar nodo HTTP a Molbot entre `Evaluate Signal` y `Hybrid Decision`.
-2. Mapear salida Molbot a payload:
-   - `ai_action` (`buy|sell|hold`)
-   - `ai_confidence` (`0..1`)
-   - `ai_reason`
-   - `ai_model`, `ai_source`.
-3. Mantener `mode=shadow` hasta cumplir métricas.
+El nodo IA espera respuesta JSON con:
+
+1. `ai_action` (`buy|sell|hold`)
+2. `ai_confidence` (`0..1`)
+3. `ai_reason` (texto corto)
+4. `ai_model` (ej. `openai-codex/gpt-5.2`)
+5. `ai_source` (ej. `molbot`)
+
+Si `MOLBOT_WEBHOOK_URL` no está definido, usa `POST /hybrid/ai/fallback`.
 
 ## Métricas De Paso
 
@@ -68,4 +75,3 @@ bash n8n/scripts/hybrid_shadow_tick.sh
 sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m
 curl -s "http://127.0.0.1:8100/hybrid/decisions?mode=shadow&limit=20"
 ```
-

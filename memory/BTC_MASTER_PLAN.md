@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 04:53 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 05:06 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -10,11 +10,12 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
 ## 2) Estado Real Verificado (Hecho)
 
 - Infra activa: `n8n_trading`, `btc_postgres`, `btc_strategy_service` arriba y saludables.
-- Workflows BTC activos (10/10):
+- Workflows BTC activos (11/11):
   - BTC Ingest Market 5m
   - BTC Feature Engineering 15m
   - BTC Forecast Validate 5m
   - BTC Hybrid Shadow 5m
+  - BTC Hybrid Hourly Report 1h
   - BTC Signal Risk Execute 15m
   - BTC Reconcile 1m
   - BTC Custody Sweep Daily
@@ -66,6 +67,12 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - workflow `BTC Hybrid Shadow 5m`
     - scripts `n8n/scripts/hybrid_shadow_tick.sh` y `n8n/scripts/hybrid_scorecard.sh`
     - política de decisión inicial conservadora: quant+AI en acuerdo o `hold`
+  - Plan híbrido fase 1 completado (5/5):
+    - conexión IA lista en workflow con `MOLBOT_WEBHOOK_URL` y fallback `POST /hybrid/ai/fallback`
+    - vinculación híbrido+forecast por `signal_id` automática (`attach_forecast=true` en `/hybrid/decision`)
+    - muestra construida: `decisions_with_outcome=137` (objetivo mínimo 50 superado)
+    - intents abiertos limpiados (`no_kyc_intents_autocancel.sh --all`, `remaining_open=0`)
+    - control horario activo: workflow `BTC Hybrid Hourly Report 1h` + endpoint `POST /hybrid/alerts/evaluate`
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -148,8 +155,9 @@ Orden de ejecucion inmediato:
 1. Ejecutar `n8n/scripts/no_kyc_lockdown.sh` al inicio.
 2. Ejecutar `n8n/scripts/zero_cost_guard.sh` y mantenerlo en verde.
 3. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
-4. Ejecutar/monitorear score híbrido `shadow` (`/hybrid/scorecard`) hasta tener muestra robusta.
-5. Persistir estado y cambios en memoria n8n + git.
+4. Monitorear cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`.
+5. Ajustar regla híbrida para subir `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
+6. Persistir estado y cambios en memoria n8n + git.
 
 Bloqueos de pre-live (irrelevantes mientras NO-KYC siga activo):
 - `EXCHANGE_ADAPTER` no esta en `ccxt`.
@@ -176,3 +184,6 @@ En cada sesion nueva:
 - Guard rail cero pesos: `bash n8n/scripts/zero_cost_guard.sh`
 - Tick híbrido sombra: `bash n8n/scripts/hybrid_shadow_tick.sh`
 - Score híbrido: `sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m`
+- Backfill híbrido: `bash n8n/scripts/hybrid_backfill_shadow.sh 120`
+- Autocancel intents: `bash n8n/scripts/no_kyc_intents_autocancel.sh --all`
+- Reporte híbrido horario manual: `bash n8n/scripts/hybrid_hourly_report.sh`

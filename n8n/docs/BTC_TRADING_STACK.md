@@ -54,6 +54,7 @@ Workflows incluidos:
 - `BTC Intents Reconcile Electrum 5m`
 - `BTC Forecast Validate 5m`
 - `BTC Hybrid Shadow 5m`
+- `BTC Hybrid Hourly Report 1h`
 
 ## 3) Proceso automático
 
@@ -89,6 +90,8 @@ Workflows incluidos:
 - `POST /hybrid/decision`
 - `GET /hybrid/decisions`
 - `GET /hybrid/scorecard`
+- `POST /hybrid/alerts/evaluate`
+- `POST /hybrid/ai/fallback`
 - `POST /reconcile`
 - `POST /custody/sweep`
 - `GET /electrum/balance`
@@ -152,6 +155,11 @@ Variables de control de riesgo:
 - `HYBRID_REQUIRE_AI_AGREEMENT=true`
 - `HYBRID_AI_MIN_CONFIDENCE=0.60`
 - `HYBRID_QUANT_MIN_CONFIDENCE=0.10`
+- `HYBRID_ALERT_MIN_RESOLVED=20`
+- `HYBRID_ALERT_MIN_ACCURACY=0.55`
+- `HYBRID_ALERT_MIN_EDGE_BPS=0`
+- `MOLBOT_WEBHOOK_URL=` (si se define, el workflow híbrido usa Molbot real)
+- `MOLBOT_AUTH_BEARER=` (opcional, para nodo HTTP autenticado)
 
 Kill switch y pérdida diaria:
 

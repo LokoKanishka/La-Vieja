@@ -1,0 +1,77 @@
+{
+  "name": "BTC Hybrid Hourly Report 1h",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 1,
+              "unit": "hours"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Hybrid_Hourly",
+      "name": "cron-btc-hybrid-hourly",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://strategy_service:8100/hybrid/scorecard?lookback_days=7&mode=shadow&horizon_minutes=10&timeframe=5m",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Hourly_Score",
+      "name": "Hybrid Scorecard 7d",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/hybrid/alerts/evaluate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"lookback_days\":7,\"mode\":\"shadow\",\"horizon_minutes\":10,\"timeframe\":\"5m\",\"persist\":true,\"include_scorecard\":true} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Hourly_Alerts",
+      "name": "Hybrid Alerts Evaluate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://strategy_service:8100/forecast/scorecard?lookback_days=7&horizon_minutes=10&timeframe=5m",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Hourly_Forecast",
+      "name": "Forecast Scorecard 7d",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    }
+  ],
+  "connections": {
+    "cron-btc-hybrid-hourly": {
+      "main": [[{ "node": "Hybrid Scorecard 7d", "type": "main", "index": 0 }]]
+    },
+    "Hybrid Scorecard 7d": {
+      "main": [[{ "node": "Hybrid Alerts Evaluate", "type": "main", "index": 0 }]]
+    },
+    "Hybrid Alerts Evaluate": {
+      "main": [[{ "node": "Forecast Scorecard 7d", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true },
+  "active": false
+}

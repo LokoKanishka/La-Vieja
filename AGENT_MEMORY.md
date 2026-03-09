@@ -67,6 +67,9 @@
   - `n8n/scripts/zero_cost_guard.sh`
   - `n8n/scripts/hybrid_shadow_tick.sh`
   - `n8n/scripts/hybrid_scorecard.sh`
+  - `n8n/scripts/hybrid_backfill_shadow.sh`
+  - `n8n/scripts/no_kyc_intents_autocancel.sh`
+  - `n8n/scripts/hybrid_hourly_report.sh`
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

@@ -110,6 +110,16 @@ else
   blocked "hybrid/scorecard no valido"
 fi
 
+hybrid_alerts_json="$(curl -fsS -X POST 'http://127.0.0.1:8100/hybrid/alerts/evaluate' -H 'Content-Type: application/json' -d '{"lookback_days":7,"mode":"shadow","horizon_minutes":10,"timeframe":"5m","persist":false,"include_scorecard":false}')" || {
+  blocked "hybrid/alerts/evaluate endpoint no responde"
+  hybrid_alerts_json='{}'
+}
+if printf '%s' "${hybrid_alerts_json}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True; assert "alert_count" in d'; then
+  ok "hybrid/alerts/evaluate responde valido"
+else
+  blocked "hybrid/alerts/evaluate no valido"
+fi
+
 workflow_count="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "select count(*) from workflow_entity where name like 'BTC %' and active = true;" | tr -d '[:space:]')" || workflow_count="0"
 if [[ "${workflow_count}" =~ ^[0-9]+$ ]] && [[ "${workflow_count}" -ge 8 ]]; then
   ok "workflows BTC activos: ${workflow_count} (minimo requerido 8)"

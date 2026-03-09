@@ -83,6 +83,28 @@ bash n8n/scripts/hybrid_shadow_tick.sh
 sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m
 ```
 
+10. Backfill híbrido para construir muestra rápida:
+
+```bash
+bash n8n/scripts/hybrid_backfill_shadow.sh 120
+```
+
+11. Limpieza de intents abiertos (todo o por antigüedad):
+
+```bash
+# cerrar todos
+bash n8n/scripts/no_kyc_intents_autocancel.sh --all
+
+# cerrar solo intents con más de 120 min
+bash n8n/scripts/no_kyc_intents_autocancel.sh 120
+```
+
+12. Reporte/alerta híbrida (manual):
+
+```bash
+bash n8n/scripts/hybrid_hourly_report.sh
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`
