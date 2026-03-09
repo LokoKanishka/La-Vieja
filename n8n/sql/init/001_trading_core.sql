@@ -214,3 +214,32 @@ create index if not exists idx_forecast_checks_outcome_due
 
 create index if not exists idx_forecast_checks_created
   on forecast_checks (created_at desc);
+
+create table if not exists hybrid_decisions (
+  decision_id uuid primary key,
+  signal_id uuid not null references signals(signal_id),
+  signal_ts timestamptz not null,
+  symbol text not null,
+  quant_action text not null check (quant_action in ('buy', 'sell', 'hold')),
+  quant_confidence numeric not null,
+  ai_action text not null check (ai_action in ('buy', 'sell', 'hold')),
+  ai_confidence numeric not null default 0,
+  ai_reason text,
+  ai_model text not null default 'unset',
+  ai_source text not null default 'pending_molbot',
+  agreement boolean not null default false,
+  hybrid_action text not null check (hybrid_action in ('buy', 'sell', 'hold')),
+  hybrid_confidence numeric not null default 0,
+  decision_reason text not null,
+  mode text not null check (mode in ('shadow', 'paper', 'live')),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(signal_id, mode, ai_source)
+);
+
+create index if not exists idx_hybrid_decisions_created
+  on hybrid_decisions (created_at desc);
+
+create index if not exists idx_hybrid_decisions_mode_created
+  on hybrid_decisions (mode, created_at desc);

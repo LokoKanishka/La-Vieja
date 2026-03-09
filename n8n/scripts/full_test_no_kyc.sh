@@ -100,6 +100,16 @@ else
   blocked "forecast/scorecard no valido"
 fi
 
+hybrid_score_json="$(curl -fsS 'http://127.0.0.1:8100/hybrid/scorecard?lookback_days=7&mode=shadow&horizon_minutes=10&timeframe=5m')" || {
+  blocked "hybrid/scorecard endpoint no responde"
+  hybrid_score_json='{}'
+}
+if printf '%s' "${hybrid_score_json}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True; assert isinstance(d.get("scorecard"), dict)'; then
+  ok "hybrid/scorecard responde con scorecard valido"
+else
+  blocked "hybrid/scorecard no valido"
+fi
+
 workflow_count="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "select count(*) from workflow_entity where name like 'BTC %' and active = true;" | tr -d '[:space:]')" || workflow_count="0"
 if [[ "${workflow_count}" =~ ^[0-9]+$ ]] && [[ "${workflow_count}" -ge 8 ]]; then
   ok "workflows BTC activos: ${workflow_count} (minimo requerido 8)"

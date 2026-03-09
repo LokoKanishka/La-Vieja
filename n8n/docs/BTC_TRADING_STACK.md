@@ -53,6 +53,7 @@ Workflows incluidos:
 - `BTC Paper Go No-Go Daily`
 - `BTC Intents Reconcile Electrum 5m`
 - `BTC Forecast Validate 5m`
+- `BTC Hybrid Shadow 5m`
 
 ## 3) Proceso automático
 
@@ -85,6 +86,9 @@ Workflows incluidos:
 - `POST /forecast/checkpoint`
 - `POST /forecast/evaluate-due`
 - `GET /forecast/scorecard`
+- `POST /hybrid/decision`
+- `GET /hybrid/decisions`
+- `GET /hybrid/scorecard`
 - `POST /reconcile`
 - `POST /custody/sweep`
 - `GET /electrum/balance`
@@ -144,6 +148,10 @@ Variables de control de riesgo:
 - `FORECAST_MIN_MOVE_BPS=5`
 - `FORECAST_MAX_RESOLUTION_LAG_MINUTES=20`
 - `FORECAST_GO_MIN_ACCURACY=0.55`
+- `HYBRID_MODE=shadow`
+- `HYBRID_REQUIRE_AI_AGREEMENT=true`
+- `HYBRID_AI_MIN_CONFIDENCE=0.60`
+- `HYBRID_QUANT_MIN_CONFIDENCE=0.10`
 
 Kill switch y pérdida diaria:
 

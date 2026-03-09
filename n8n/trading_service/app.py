@@ -50,6 +50,10 @@ FORECAST_DEFAULT_HORIZON_MINUTES = int(os.getenv("FORECAST_DEFAULT_HORIZON_MINUT
 FORECAST_MIN_MOVE_BPS = float(os.getenv("FORECAST_MIN_MOVE_BPS", "5"))
 FORECAST_MAX_RESOLUTION_LAG_MINUTES = int(os.getenv("FORECAST_MAX_RESOLUTION_LAG_MINUTES", "20"))
 FORECAST_GO_MIN_ACCURACY = float(os.getenv("FORECAST_GO_MIN_ACCURACY", "0.55"))
+HYBRID_MODE = os.getenv("HYBRID_MODE", "shadow").lower()
+HYBRID_REQUIRE_AI_AGREEMENT = os.getenv("HYBRID_REQUIRE_AI_AGREEMENT", "true").lower() == "true"
+HYBRID_AI_MIN_CONFIDENCE = float(os.getenv("HYBRID_AI_MIN_CONFIDENCE", "0.60"))
+HYBRID_QUANT_MIN_CONFIDENCE = float(os.getenv("HYBRID_QUANT_MIN_CONFIDENCE", "0.10"))
 
 EXCHANGE_ADAPTER = os.getenv("EXCHANGE_ADAPTER", "paper").lower()
 EXCHANGE_ID = os.getenv("EXCHANGE_ID", "kraken")
@@ -174,6 +178,17 @@ class ForecastEvaluateDueRequest(BaseModel):
     limit: int = 200
     max_resolution_lag_minutes: int = FORECAST_MAX_RESOLUTION_LAG_MINUTES
     persist_events: bool = True
+
+
+class HybridDecisionRequest(BaseModel):
+    signal_id: str
+    ai_action: str | None = None
+    ai_confidence: float | None = None
+    ai_reason: str | None = None
+    ai_model: str = "unset"
+    ai_source: str = "pending_molbot"
+    mode: str = HYBRID_MODE
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def utc_now() -> datetime:
@@ -325,6 +340,44 @@ def bootstrap_runtime_schema() -> None:
             """
             create index if not exists idx_forecast_checks_created
             on forecast_checks(created_at desc)
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists hybrid_decisions (
+              decision_id uuid primary key,
+              signal_id uuid not null references signals(signal_id),
+              signal_ts timestamptz not null,
+              symbol text not null,
+              quant_action text not null check (quant_action in ('buy', 'sell', 'hold')),
+              quant_confidence numeric not null,
+              ai_action text not null check (ai_action in ('buy', 'sell', 'hold')),
+              ai_confidence numeric not null default 0,
+              ai_reason text,
+              ai_model text not null default 'unset',
+              ai_source text not null default 'pending_molbot',
+              agreement boolean not null default false,
+              hybrid_action text not null check (hybrid_action in ('buy', 'sell', 'hold')),
+              hybrid_confidence numeric not null default 0,
+              decision_reason text not null,
+              mode text not null check (mode in ('shadow', 'paper', 'live')),
+              metadata jsonb not null default '{}'::jsonb,
+              created_at timestamptz not null default now(),
+              updated_at timestamptz not null default now(),
+              unique(signal_id, mode, ai_source)
+            )
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_hybrid_decisions_created
+            on hybrid_decisions(created_at desc)
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_hybrid_decisions_mode_created
+            on hybrid_decisions(mode, created_at desc)
             """
         )
         cur.execute(
@@ -1169,6 +1222,153 @@ def build_forecast_scorecard(
     }
 
 
+def normalize_trade_action(action: str | None) -> str:
+    normalized = (action or "").strip().lower()
+    if normalized in {"buy", "sell", "hold"}:
+        return normalized
+    raise HTTPException(status_code=400, detail="action debe ser buy|sell|hold")
+
+
+def normalize_hybrid_mode(mode: str | None) -> str:
+    normalized = (mode or "").strip().lower()
+    if normalized in {"shadow", "paper", "live"}:
+        return normalized
+    raise HTTPException(status_code=400, detail="mode debe ser shadow|paper|live")
+
+
+def resolve_hybrid_action(
+    quant_action: str,
+    quant_confidence: float,
+    ai_action: str,
+    ai_confidence: float,
+) -> tuple[str, float, bool, str]:
+    if quant_action == "hold":
+        return "hold", max(0.0, quant_confidence), ai_action == quant_action, "quant_hold"
+
+    agreement = ai_action == quant_action
+    if agreement and ai_confidence >= HYBRID_AI_MIN_CONFIDENCE:
+        return quant_action, min(0.99, max(quant_confidence, ai_confidence)), True, "quant_ai_agree"
+
+    if not HYBRID_REQUIRE_AI_AGREEMENT and quant_confidence >= HYBRID_QUANT_MIN_CONFIDENCE:
+        return quant_action, min(0.99, max(0.05, quant_confidence)), agreement, "quant_primary_without_ai_agreement"
+
+    return "hold", 0.0, agreement, "ai_disagree_or_low_confidence"
+
+
+def build_hybrid_scorecard(
+    cur: psycopg.Cursor,
+    lookback_days: int,
+    horizon_minutes: int | None,
+    timeframe: str | None,
+    mode: str,
+) -> dict[str, Any]:
+    window_start = utc_now() - timedelta(days=lookback_days)
+    cur.execute(
+        """
+        select d.decision_id, d.quant_action, d.ai_action, d.hybrid_action,
+               d.quant_confidence, d.ai_confidence, d.hybrid_confidence,
+               d.agreement, d.decision_reason,
+               f.price_change_bps, f.min_move_bps, f.outcome as forecast_outcome
+        from hybrid_decisions d
+        left join forecast_checks f
+          on f.signal_id = d.signal_id
+         and (%s::int is null or f.horizon_minutes = %s)
+         and (%s::text is null or f.timeframe = %s)
+        where d.created_at >= %s
+          and d.mode = %s
+        order by d.created_at desc
+        """,
+        (horizon_minutes, horizon_minutes, timeframe, timeframe, window_start, mode),
+    )
+    rows = cur.fetchall()
+
+    total = len(rows)
+    agreement_count = 0
+    tradable = 0
+    with_outcome = 0
+
+    quant_hits = 0
+    quant_misses = 0
+    ai_hits = 0
+    ai_misses = 0
+    hybrid_hits = 0
+    hybrid_misses = 0
+
+    quant_edges: list[float] = []
+    ai_edges: list[float] = []
+    hybrid_edges: list[float] = []
+
+    reason_counts: dict[str, int] = {}
+
+    for row in rows:
+        if bool(row["agreement"]):
+            agreement_count += 1
+        reason = str(row["decision_reason"])
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if str(row["hybrid_action"]) in {"buy", "sell"}:
+            tradable += 1
+
+        if row["forecast_outcome"] not in {"hit", "miss"} or row["price_change_bps"] is None:
+            continue
+
+        with_outcome += 1
+        change_bps = float(row["price_change_bps"])
+        min_move_bps = float(row["min_move_bps"] or FORECAST_MIN_MOVE_BPS)
+
+        quant_action = str(row["quant_action"])
+        ai_action = str(row["ai_action"])
+        hybrid_action = str(row["hybrid_action"])
+
+        quant_outcome = forecast_outcome_for_move(quant_action, change_bps, min_move_bps)
+        ai_outcome = forecast_outcome_for_move(ai_action, change_bps, min_move_bps)
+        hybrid_outcome = forecast_outcome_for_move(hybrid_action, change_bps, min_move_bps)
+
+        if quant_outcome == "hit":
+            quant_hits += 1
+        else:
+            quant_misses += 1
+        if ai_outcome == "hit":
+            ai_hits += 1
+        else:
+            ai_misses += 1
+        if hybrid_outcome == "hit":
+            hybrid_hits += 1
+        else:
+            hybrid_misses += 1
+
+        quant_edges.append(forecast_edge_bps(quant_action, change_bps))
+        ai_edges.append(forecast_edge_bps(ai_action, change_bps))
+        hybrid_edges.append(forecast_edge_bps(hybrid_action, change_bps))
+
+    def metric_block(hits: int, misses: int, edges: list[float]) -> dict[str, Any]:
+        resolved = hits + misses
+        accuracy = (hits / resolved) if resolved > 0 else None
+        avg_edge = (sum(edges) / len(edges)) if edges else None
+        return {
+            "hits": hits,
+            "misses": misses,
+            "resolved": resolved,
+            "accuracy": None if accuracy is None else round(accuracy, 4),
+            "avg_edge_bps": None if avg_edge is None else round(avg_edge, 4),
+        }
+
+    return {
+        "generated_at": utc_now().isoformat(),
+        "lookback_days": lookback_days,
+        "window_start": window_start.isoformat(),
+        "filters": {"mode": mode, "horizon_minutes": horizon_minutes, "timeframe": timeframe},
+        "total_decisions": total,
+        "tradable_decisions": tradable,
+        "agreement_count": agreement_count,
+        "agreement_rate": round((agreement_count / total), 4) if total > 0 else None,
+        "decisions_with_outcome": with_outcome,
+        "reason_counts": reason_counts,
+        "quant": metric_block(quant_hits, quant_misses, quant_edges),
+        "ai": metric_block(ai_hits, ai_misses, ai_edges),
+        "hybrid": metric_block(hybrid_hits, hybrid_misses, hybrid_edges),
+    }
+
+
 def electrum_best_receive_address() -> str | None:
     if not ENABLE_ELECTRUM_RPC:
         return None
@@ -1828,6 +2028,159 @@ def forecast_scorecard(
 
     with get_conn() as conn, conn.cursor() as cur:
         scorecard = build_forecast_scorecard(cur, lookback_days, horizon_minutes, tf)
+
+    return {"ok": True, "scorecard": scorecard}
+
+
+@app.post("/hybrid/decision")
+def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
+    ai_action = normalize_trade_action(req.ai_action) if req.ai_action is not None else "hold"
+    ai_confidence = max(0.0, min(0.99, float(req.ai_confidence if req.ai_confidence is not None else 0.0)))
+    mode = normalize_hybrid_mode(req.mode)
+    ai_source = (req.ai_source or "").strip() or "pending_molbot"
+    ai_model = (req.ai_model or "").strip() or "unset"
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select signal_id, ts, symbol, action, confidence
+            from signals
+            where signal_id = %s
+            """,
+            (req.signal_id,),
+        )
+        signal = cur.fetchone()
+        if not signal:
+            raise HTTPException(status_code=404, detail="signal_id no encontrado")
+
+        quant_action = normalize_trade_action(signal["action"])
+        quant_confidence = max(0.0, min(0.99, float(signal["confidence"])))
+        symbol = str(signal["symbol"])
+        signal_ts = signal["ts"]
+
+        hybrid_action, hybrid_confidence, agreement, reason = resolve_hybrid_action(
+            quant_action, quant_confidence, ai_action, ai_confidence
+        )
+
+        decision_id = str(uuid.uuid4())
+        metadata = dict(req.metadata or {})
+        metadata["hybrid_policy"] = {
+            "require_ai_agreement": HYBRID_REQUIRE_AI_AGREEMENT,
+            "ai_min_confidence": HYBRID_AI_MIN_CONFIDENCE,
+            "quant_min_confidence": HYBRID_QUANT_MIN_CONFIDENCE,
+        }
+
+        cur.execute(
+            """
+            insert into hybrid_decisions(
+                decision_id, signal_id, signal_ts, symbol,
+                quant_action, quant_confidence,
+                ai_action, ai_confidence, ai_reason, ai_model, ai_source,
+                agreement, hybrid_action, hybrid_confidence, decision_reason,
+                mode, metadata, created_at, updated_at
+            )
+            values(
+                %s, %s, %s, %s,
+                %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s::jsonb, now(), now()
+            )
+            on conflict(signal_id, mode, ai_source) do update
+                set quant_action = excluded.quant_action,
+                    quant_confidence = excluded.quant_confidence,
+                    ai_action = excluded.ai_action,
+                    ai_confidence = excluded.ai_confidence,
+                    ai_reason = excluded.ai_reason,
+                    ai_model = excluded.ai_model,
+                    agreement = excluded.agreement,
+                    hybrid_action = excluded.hybrid_action,
+                    hybrid_confidence = excluded.hybrid_confidence,
+                    decision_reason = excluded.decision_reason,
+                    metadata = excluded.metadata,
+                    updated_at = now()
+            returning decision_id
+            """,
+            (
+                decision_id,
+                req.signal_id,
+                signal_ts,
+                symbol,
+                quant_action,
+                quant_confidence,
+                ai_action,
+                ai_confidence,
+                req.ai_reason,
+                ai_model,
+                ai_source,
+                agreement,
+                hybrid_action,
+                hybrid_confidence,
+                reason,
+                mode,
+                json.dumps(metadata),
+            ),
+        )
+        decision_row = cur.fetchone()
+        conn.commit()
+
+    return {
+        "ok": True,
+        "decision_id": str(decision_row["decision_id"]),
+        "signal_id": req.signal_id,
+        "symbol": symbol,
+        "mode": mode,
+        "quant": {"action": quant_action, "confidence": round(quant_confidence, 4)},
+        "ai": {"action": ai_action, "confidence": round(ai_confidence, 4), "source": ai_source, "model": ai_model},
+        "agreement": agreement,
+        "hybrid": {"action": hybrid_action, "confidence": round(hybrid_confidence, 4), "reason": reason},
+        "execution": "shadow_only" if mode == "shadow" else "manual_gate_required",
+    }
+
+
+@app.get("/hybrid/decisions")
+def hybrid_decisions(mode: str = HYBRID_MODE, limit: int = 50) -> dict[str, Any]:
+    selected_mode = normalize_hybrid_mode(mode)
+    cap = max(1, min(int(limit), 200))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select decision_id, signal_id, signal_ts, symbol,
+                   quant_action, quant_confidence,
+                   ai_action, ai_confidence, ai_reason, ai_model, ai_source,
+                   agreement, hybrid_action, hybrid_confidence, decision_reason,
+                   mode, metadata, created_at, updated_at
+            from hybrid_decisions
+            where mode = %s
+            order by created_at desc
+            limit %s
+            """,
+            (selected_mode, cap),
+        )
+        rows = cur.fetchall()
+    return {"ok": True, "mode": selected_mode, "count": len(rows), "items": rows}
+
+
+@app.get("/hybrid/scorecard")
+def hybrid_scorecard(
+    lookback_days: int = 7,
+    mode: str = HYBRID_MODE,
+    horizon_minutes: int | None = 10,
+    timeframe: str | None = "5m",
+) -> dict[str, Any]:
+    if lookback_days < 1 or lookback_days > 120:
+        raise HTTPException(status_code=400, detail="lookback_days debe estar entre 1 y 120")
+    selected_mode = normalize_hybrid_mode(mode)
+    if horizon_minutes is not None and (horizon_minutes < 1 or horizon_minutes > 120):
+        raise HTTPException(status_code=400, detail="horizon_minutes debe estar entre 1 y 120")
+    tf = None
+    if timeframe is not None:
+        tf = timeframe.strip()
+        if not tf:
+            tf = None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        scorecard = build_hybrid_scorecard(cur, lookback_days, horizon_minutes, tf, selected_mode)
 
     return {"ok": True, "scorecard": scorecard}
 

@@ -36,11 +36,17 @@
   - Modo `paper` para ejecución automática segura.
   - Modo `live` disponible vía `ccxt` (requiere credenciales en `n8n/.env.trading`).
   - Electrum integrado por RPC para custodia (`/electrum/balance`, `/electrum/rpc`), no como motor de matching.
+  - Módulo híbrido activo en modo sombra (`/hybrid/decision`, `/hybrid/scorecard`).
 - Workflows de trading listos para importar en `n8n/workflows/trading/`:
   - ingesta mercado 5m
   - features 15m
+  - forecast validate 5m
+  - hybrid shadow 5m
   - señal/riesgo/ejecución 15m
+  - intents reconcile 5m
   - reconcile 1m
+  - ops monitor 1m
+  - paper go/no-go daily
   - sweep de custodia diario
 - Scripts operativos nuevos:
   - `n8n/scripts/trading_up.sh`
@@ -58,6 +64,9 @@
   - `scripts/memory_find.sh`
   - `n8n/scripts/import_workflows_api.sh`
   - `n8n/scripts/print_active_webhooks.sh`
+  - `n8n/scripts/zero_cost_guard.sh`
+  - `n8n/scripts/hybrid_shadow_tick.sh`
+  - `n8n/scripts/hybrid_scorecard.sh`
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

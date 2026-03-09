@@ -22,6 +22,8 @@ upsert_env() {
 upsert_env "TRADING_MODE" "paper"
 upsert_env "EXCHANGE_ADAPTER" "paper"
 upsert_env "EXCHANGE_SANDBOX" "false"
+upsert_env "HYBRID_MODE" "shadow"
+upsert_env "HYBRID_REQUIRE_AI_AGREEMENT" "true"
 for key in \
   EXCHANGE_API_KEY \
   EXCHANGE_API_SECRET \

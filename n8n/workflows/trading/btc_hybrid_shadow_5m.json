@@ -1,0 +1,98 @@
+{
+  "name": "BTC Hybrid Shadow 5m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Hybrid_5m",
+      "name": "cron-btc-hybrid-5m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/features/build",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\",\"timeframe\":\"5m\",\"lookback\":96} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Build_Features",
+      "name": "Build Features 5m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/signal/evaluate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\"} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Signal",
+      "name": "Evaluate Signal 5m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/hybrid/decision",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"mode\":\"shadow\",\"ai_source\":\"pending_molbot\",\"ai_model\":\"unset\",\"metadata\":{\"source\":\"n8n_hybrid_shadow_5m\"}} }}",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Decision",
+      "name": "Hybrid Decision Shadow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://strategy_service:8100/hybrid/scorecard?lookback_days=7&mode=shadow&horizon_minutes=10&timeframe=5m",
+        "options": {}
+      },
+      "id": "Http_Hybrid_Scorecard",
+      "name": "Hybrid Scorecard 7d",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1350, 300]
+    }
+  ],
+  "connections": {
+    "cron-btc-hybrid-5m": {
+      "main": [[{ "node": "Build Features 5m", "type": "main", "index": 0 }]]
+    },
+    "Build Features 5m": {
+      "main": [[{ "node": "Evaluate Signal 5m", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Signal 5m": {
+      "main": [[{ "node": "Hybrid Decision Shadow", "type": "main", "index": 0 }]]
+    },
+    "Hybrid Decision Shadow": {
+      "main": [[{ "node": "Hybrid Scorecard 7d", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true },
+  "active": false
+}

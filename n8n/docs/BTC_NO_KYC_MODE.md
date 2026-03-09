@@ -76,6 +76,13 @@ sh n8n/scripts/forecast_scorecard.sh 7 10 5m
 bash n8n/scripts/zero_cost_guard.sh
 ```
 
+9. Esqueleto híbrido (quant + IA) en modo sombra:
+
+```bash
+bash n8n/scripts/hybrid_shadow_tick.sh
+sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`

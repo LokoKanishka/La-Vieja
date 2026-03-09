@@ -1,0 +1,71 @@
+# BTC Hybrid Brain Plan (Zero-Cost Skeleton)
+
+## Objetivo
+
+Combinar motor cuantitativo (`strategy_service`) con capa IA (`Molbot`) en modo `shadow` primero,
+sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 5-10 minutos.
+
+## Reglas Fijas
+
+1. Cero costo extra: sin API keys pagas en esta máquina.
+2. Cero KYC: `paper` + intents externos manuales.
+3. Seguridad primero: modo `shadow` por defecto (sin ejecución automática del híbrido).
+
+## Arquitectura Híbrida
+
+1. `n8n` orquesta.
+2. `strategy_service` genera señal quant y evalúa forecast.
+3. `Molbot` (cuando se conecte) aporta `ai_action/ai_confidence/ai_reason`.
+4. Endpoint `POST /hybrid/decision` fusiona quant + AI y guarda decisión en `hybrid_decisions`.
+5. Endpoint `GET /hybrid/scorecard` compara performance de quant vs AI vs híbrido.
+
+## Estado Del Esqueleto (implementado)
+
+1. Tabla `hybrid_decisions` + índices.
+2. Endpoints:
+   - `POST /hybrid/decision`
+   - `GET /hybrid/decisions`
+   - `GET /hybrid/scorecard`
+3. Workflow `BTC Hybrid Shadow 5m`:
+   - build features -> evaluate signal -> hybrid decision (sin IA real todavía) -> hybrid scorecard.
+4. Scripts:
+   - `n8n/scripts/hybrid_shadow_tick.sh`
+   - `n8n/scripts/hybrid_scorecard.sh`
+5. `no_kyc_cycle.sh` y `full_test_no_kyc.sh` incluyen validación híbrida.
+
+## Política De Decisión Híbrida (actual)
+
+1. Si quant = `hold` -> híbrido = `hold`.
+2. Si quant y AI coinciden y AI supera umbral -> híbrido toma esa acción.
+3. Si no hay acuerdo (o AI débil) -> híbrido = `hold` (modo conservador).
+4. Configurable por variables:
+   - `HYBRID_MODE`
+   - `HYBRID_REQUIRE_AI_AGREEMENT`
+   - `HYBRID_AI_MIN_CONFIDENCE`
+   - `HYBRID_QUANT_MIN_CONFIDENCE`
+
+## Fase Siguiente (conectar Molbot real)
+
+1. En n8n, insertar nodo HTTP a Molbot entre `Evaluate Signal` y `Hybrid Decision`.
+2. Mapear salida Molbot a payload:
+   - `ai_action` (`buy|sell|hold`)
+   - `ai_confidence` (`0..1`)
+   - `ai_reason`
+   - `ai_model`, `ai_source`.
+3. Mantener `mode=shadow` hasta cumplir métricas.
+
+## Métricas De Paso
+
+1. Mínimo 50 decisiones híbridas con outcome.
+2. `hybrid.accuracy >= 0.55`.
+3. `hybrid.avg_edge_bps > 0`.
+4. Híbrido debe superar quant en al menos 7 días continuos.
+
+## Comandos Rápidos
+
+```bash
+bash n8n/scripts/hybrid_shadow_tick.sh
+sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m
+curl -s "http://127.0.0.1:8100/hybrid/decisions?mode=shadow&limit=20"
+```
+

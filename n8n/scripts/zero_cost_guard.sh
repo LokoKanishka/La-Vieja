@@ -29,6 +29,7 @@ blocked() {
 
 trading_mode="$(env_get TRADING_MODE)"
 exchange_adapter="$(env_get EXCHANGE_ADAPTER)"
+hybrid_mode="$(env_get HYBRID_MODE)"
 
 if [[ "${trading_mode:-paper}" == "paper" ]]; then
   ok "TRADING_MODE=paper"
@@ -40,6 +41,12 @@ if [[ "${exchange_adapter:-paper}" == "paper" ]]; then
   ok "EXCHANGE_ADAPTER=paper"
 else
   blocked "EXCHANGE_ADAPTER debe ser paper (actual=${exchange_adapter})"
+fi
+
+if [[ "${hybrid_mode:-shadow}" == "shadow" ]]; then
+  ok "HYBRID_MODE=shadow"
+else
+  blocked "HYBRID_MODE debe ser shadow en esta maquina (actual=${hybrid_mode})"
 fi
 
 for key in \
@@ -71,4 +78,3 @@ if [[ "${fail}" -gt 0 ]]; then
   exit 2
 fi
 exit 0
-
