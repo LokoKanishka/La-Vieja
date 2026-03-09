@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 05:40 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 20:33 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -91,6 +91,17 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
       - `hybrid.avg_edge_bps=-3.9721`
       - `outlier_excluded=5`
       - `decisions_with_outcome=48` (meta mínima de muestra casi alcanzada)
+  - Continuación técnica ejecutada (esta sesión):
+    - Script nuevo `n8n/scripts/backfill_market_binance_5m.sh` para cubrir huecos históricos de velas 5m desde Binance (sin API key).
+    - Carga histórica aplicada: `5979` velas `BTCUSD/5m` en venue `binance`.
+    - Recalibración de forecasts históricos aplicada sobre velas alineadas.
+    - `build_features`, `forecast/checkpoint`, `forecast/evaluate-due` y `hybrid/decision` ahora priorizan velas alineadas a 5m y prefieren venue `binance` ante empate temporal.
+    - Política quant adaptativa incorporada en `signal/evaluate` (`SIGNAL_POLICY=adaptive_edge`) y persistida en `.env.trading` + `no_kyc_lockdown.sh`.
+    - Resultado operativo actual:
+      - `decisions_with_outcome=81` (objetivo >=80 cumplido)
+      - `outlier_excluded=0`
+      - `hybrid.accuracy=0.321`
+      - `hybrid.avg_edge_bps=-5.4664` (sigue negativo)
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -216,10 +227,10 @@ En cada sesion nueva:
    - mantener `BTC Hybrid Shadow 5m` y `BTC Hybrid Hourly Report 1h` activos
    - revisar cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`
 3. Objetivo minimo de muestra para decidir siguiente ajuste:
-   - `decisions_with_outcome >= 80`
-   - `outlier_excluded` estable (sin crecer por fallas de datos)
+   - `decisions_with_outcome >= 80` (cumplido)
+   - `outlier_excluded` estable (actual: `0`, cumplido)
 4. Criterio de decision tecnica al cerrar esa muestra:
    - si `hybrid.avg_edge_bps > 0` y sube accuracy: mantener política actual
-   - si `hybrid.avg_edge_bps <= 0`: pasar a ajuste de estrategia quant (no solo fallback IA)
+   - si `hybrid.avg_edge_bps <= 0`: pasar a ajuste de estrategia quant (no solo fallback IA) (activo ahora)
 5. Mantener regla de oro:
    - no live, no KYC, no tarjeta, no APIs pagas en esta máquina.

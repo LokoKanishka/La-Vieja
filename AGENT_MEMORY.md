@@ -76,11 +76,14 @@
   - `docker-compose.trading.yml` ahora inyecta variables `forecast/hybrid` completas al `strategy_service`.
   - `POST /hybrid/ai/fallback` soporta `HYBRID_FALLBACK_POLICY=adaptive_edge` (selección por edge reciente).
   - Scorecards `forecast/hybrid` excluyen outliers con `FORECAST_MAX_ABS_CHANGE_BPS`.
+  - `n8n/scripts/backfill_market_binance_5m.sh` agrega velas históricas 5m desde Binance para cerrar huecos previos de mercado.
+  - `signal/evaluate` ahora soporta `SIGNAL_POLICY=adaptive_edge` para invertir/confirmar señal base según edge histórico reciente.
+  - Queries de features/forecast/hybrid priorizan velas alineadas a 5m y prefieren venue `binance` en empate temporal.
 - Pendientes críticos actuales para la próxima sesión:
   - Mantener `full_test_no_kyc.sh` en `failed=0`.
   - Mantener `open_intents=0`.
-  - Llevar muestra híbrida forward a `decisions_with_outcome >= 80`.
-  - Confirmar quiebre a edge positivo; si no sucede, ajustar estrategia quant base.
+  - Objetivo de muestra híbrida ya cumplido (`decisions_with_outcome=81`, `outlier_excluded=0`).
+  - Pendiente activo: convertir `hybrid.avg_edge_bps` a positivo (actual `-5.4664`) con ajuste quant adicional.
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

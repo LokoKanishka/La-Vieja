@@ -28,6 +28,10 @@ MAX_ORDERS_PER_HOUR = int(os.getenv("MAX_ORDERS_PER_HOUR", "12"))
 DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "300"))
 TAKER_FEE_BPS = float(os.getenv("TAKER_FEE_BPS", "10"))
 VOLATILITY_CUTOFF = float(os.getenv("VOLATILITY_CUTOFF", "0.08"))
+SIGNAL_POLICY = os.getenv("SIGNAL_POLICY", "adaptive_edge").strip().lower()
+SIGNAL_ADAPT_LOOKBACK_DAYS = int(os.getenv("SIGNAL_ADAPT_LOOKBACK_DAYS", "14"))
+SIGNAL_ADAPT_MIN_SAMPLES = int(os.getenv("SIGNAL_ADAPT_MIN_SAMPLES", "40"))
+SIGNAL_ADAPT_EDGE_MARGIN_BPS = float(os.getenv("SIGNAL_ADAPT_EDGE_MARGIN_BPS", "0"))
 GLOBAL_KILL_SWITCH_DEFAULT = os.getenv("GLOBAL_KILL_SWITCH_DEFAULT", "false").lower() == "true"
 MONITORED_SYMBOL = os.getenv("MONITORED_SYMBOL", "BTCUSD")
 MONITORED_TIMEFRAME = os.getenv("MONITORED_TIMEFRAME", "5m")
@@ -1289,6 +1293,91 @@ def inverse_action(action: str) -> str:
     return "hold"
 
 
+def apply_signal_policy(cur: psycopg.Cursor, symbol: str, base_action: str) -> tuple[str, str]:
+    if base_action not in {"buy", "sell"}:
+        return base_action, "signal_policy_hold"
+
+    policy = SIGNAL_POLICY
+    if policy == "inverse_v1":
+        chosen = inverse_action(base_action)
+        return chosen, f"signal_policy_inverse_v1:{base_action}->{chosen}"
+
+    if policy != "adaptive_edge":
+        return base_action, f"signal_policy_{policy}:fallback_trend_v1"
+
+    try:
+        window_start = utc_now() - timedelta(days=max(1, SIGNAL_ADAPT_LOOKBACK_DAYS))
+        cur.execute(
+            """
+            with chosen as (
+              select distinct on (s.symbol, s.ts, s.strategy_version)
+                     s.action as quant_action,
+                     f.price_change_bps::float8 as change_bps
+              from signals s
+              join forecast_checks f
+                on f.signal_id = s.signal_id
+              where s.symbol = %s
+                and s.created_at >= %s
+                and f.timeframe = %s
+                and f.horizon_minutes = %s
+                and f.outcome in ('hit', 'miss')
+                and f.price_change_bps is not null
+                and abs(f.price_change_bps::float8) <= %s
+              order by s.symbol, s.ts, s.strategy_version, s.created_at desc, s.signal_id desc
+            )
+            select count(*) as samples,
+                   avg(case
+                         when quant_action = 'buy' then change_bps
+                         when quant_action = 'sell' then -change_bps
+                         else -abs(change_bps)
+                       end) as quant_edge,
+                   avg(case
+                         when quant_action = 'buy' then -change_bps
+                         when quant_action = 'sell' then change_bps
+                         else -abs(change_bps)
+                       end) as inverse_edge
+            from chosen
+            """,
+            (
+                symbol,
+                window_start,
+                MONITORED_TIMEFRAME,
+                FORECAST_DEFAULT_HORIZON_MINUTES,
+                FORECAST_MAX_ABS_CHANGE_BPS,
+            ),
+        )
+        row = cur.fetchone()
+        samples = int(row["samples"] or 0) if row else 0
+        quant_edge = float(row["quant_edge"]) if row and row["quant_edge"] is not None else None
+        inverse_edge = float(row["inverse_edge"]) if row and row["inverse_edge"] is not None else None
+    except Exception:
+        return base_action, "signal_policy_adaptive_edge:error_fallback_trend_v1"
+
+    if (
+        samples >= SIGNAL_ADAPT_MIN_SAMPLES
+        and quant_edge is not None
+        and inverse_edge is not None
+        and inverse_edge > (quant_edge + SIGNAL_ADAPT_EDGE_MARGIN_BPS)
+    ):
+        chosen = inverse_action(base_action)
+        return (
+            chosen,
+            (
+                f"signal_policy_adaptive_edge:choice=inverse,samples={samples},"
+                f"quant_edge={round(quant_edge,4)},inverse_edge={round(inverse_edge,4)}"
+            ),
+        )
+
+    return (
+        base_action,
+        (
+            f"signal_policy_adaptive_edge:choice=trend_v1,samples={samples},"
+            f"quant_edge={None if quant_edge is None else round(quant_edge,4)},"
+            f"inverse_edge={None if inverse_edge is None else round(inverse_edge,4)}"
+        ),
+    )
+
+
 def resolve_hybrid_action(
     quant_action: str,
     quant_confidence: float,
@@ -1324,27 +1413,31 @@ def build_hybrid_scorecard(
     window_start = utc_now() - timedelta(days=lookback_days)
     cur.execute(
         """
-        select d.decision_id, d.quant_action, d.ai_action, d.hybrid_action,
-               d.quant_confidence, d.ai_confidence, d.hybrid_confidence,
-               d.agreement, d.decision_reason,
-               f.price_change_bps, f.min_move_bps, f.outcome as forecast_outcome
+        select x.decision_id, x.quant_action, x.ai_action, x.hybrid_action,
+               x.quant_confidence, x.ai_confidence, x.hybrid_confidence,
+               x.agreement, x.decision_reason, x.price_change_bps, x.min_move_bps,
+               x.forecast_outcome, x.created_at, x.updated_at
         from (
-          select distinct on (symbol, signal_ts)
-                 decision_id, signal_id, quant_action, ai_action, hybrid_action,
-                 quant_confidence, ai_confidence, hybrid_confidence,
-                 agreement, decision_reason, symbol, signal_ts, created_at, updated_at
-          from hybrid_decisions
-          where created_at >= %s
-            and mode = %s
-          order by symbol, signal_ts, updated_at desc, created_at desc
-        ) d
-        left join forecast_checks f
-          on f.signal_id = d.signal_id
-         and (%s::int is null or f.horizon_minutes = %s)
-         and (%s::text is null or f.timeframe = %s)
-        order by d.updated_at desc, d.created_at desc
+          select distinct on (d.symbol, d.signal_ts)
+                 d.decision_id, d.quant_action, d.ai_action, d.hybrid_action,
+                 d.quant_confidence, d.ai_confidence, d.hybrid_confidence,
+                 d.agreement, d.decision_reason,
+                 f.price_change_bps, f.min_move_bps, f.outcome as forecast_outcome,
+                 d.created_at, d.updated_at
+          from hybrid_decisions d
+          left join forecast_checks f
+            on f.signal_id = d.signal_id
+           and (%s::int is null or f.horizon_minutes = %s)
+           and (%s::text is null or f.timeframe = %s)
+          where d.created_at >= %s
+            and d.mode = %s
+          order by d.symbol, d.signal_ts,
+                   case when f.forecast_id is null then 1 else 0 end,
+                   d.updated_at desc, d.created_at desc
+        ) x
+        order by x.updated_at desc, x.created_at desc
         """,
-        (window_start, mode, horizon_minutes, horizon_minutes, timeframe, timeframe),
+        (horizon_minutes, horizon_minutes, timeframe, timeframe, window_start, mode),
     )
     rows = cur.fetchall()
 
@@ -1712,12 +1805,21 @@ def build_features(req: FeatureBuildRequest) -> dict[str, Any]:
         cur.execute(
             """
             select ts, close
-            from market_candles
-            where symbol = %s and timeframe = %s
+            from (
+              select distinct on (ts)
+                     ts, close, venue, updated_at
+              from market_candles
+              where symbol = %s
+                and timeframe = %s
+                and (%s <> '5m' or (extract(second from ts) = 0 and mod(extract(minute from ts)::int, 5) = 0))
+              order by ts desc,
+                       case when venue = 'binance' then 0 else 1 end,
+                       updated_at desc
+            ) c
             order by ts desc
             limit %s
             """,
-            (req.symbol, req.timeframe, req.lookback),
+            (req.symbol, req.timeframe, req.timeframe, req.lookback),
         )
         rows = cur.fetchall()
         if len(rows) < 25:
@@ -1799,6 +1901,8 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         elif sma_short < sma_long and momentum < 0:
             action = "sell"
 
+        action, policy_note = apply_signal_policy(cur, req.symbol, action)
+
         trend_score = abs(sma_short - sma_long) / max(abs(sma_long), 1e-9)
         confidence = min(0.99, max(0.05, abs(momentum) * 10.0 + trend_score * 5.0))
 
@@ -1807,7 +1911,10 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
             target_notional = 0.0
 
         signal_id = str(uuid.uuid4())
-        reason = f"sma8={sma_short:.2f}, sma21={sma_long:.2f}, momentum12={momentum:.5f}, vol20={volatility:.5f}"
+        reason = (
+            f"sma8={sma_short:.2f}, sma21={sma_long:.2f}, momentum12={momentum:.5f}, "
+            f"vol20={volatility:.5f}, {policy_note}"
+        )
 
         signal_ts = feature_row["ts"]
         cur.execute(
@@ -1925,10 +2032,12 @@ def forecast_checkpoint(req: ForecastCheckpointRequest) -> dict[str, Any]:
             select ts, close
             from market_candles
             where symbol = %s and timeframe = %s and ts <= %s
-            order by ts desc
+              and (%s <> '5m' or (extract(second from ts) = 0 and mod(extract(minute from ts)::int, 5) = 0))
+            order by ts desc,
+                     case when venue = 'binance' then 0 else 1 end
             limit 1
             """,
-            (symbol, timeframe, signal_ts),
+            (symbol, timeframe, signal_ts, timeframe),
         )
         candle = cur.fetchone()
         if not candle:
@@ -2060,10 +2169,12 @@ def forecast_evaluate_due(req: ForecastEvaluateDueRequest) -> dict[str, Any]:
                 where symbol = %s
                   and timeframe = %s
                   and ts >= %s
-                order by ts asc
+                  and (%s <> '5m' or (extract(second from ts) = 0 and mod(extract(minute from ts)::int, 5) = 0))
+                order by ts asc,
+                         case when venue = 'binance' then 0 else 1 end
                 limit 1
                 """,
-                (symbol, timeframe, due_ts),
+                (symbol, timeframe, due_ts, timeframe),
             )
             resolution = cur.fetchone()
             if not resolution:
@@ -2261,10 +2372,12 @@ def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
                 where symbol = %s
                   and timeframe = %s
                   and ts <= %s
-                order by ts desc
+                  and (%s <> '5m' or (extract(second from ts) = 0 and mod(extract(minute from ts)::int, 5) = 0))
+                order by ts desc,
+                         case when venue = 'binance' then 0 else 1 end
                 limit 1
                 """,
-                (symbol, timeframe, signal_ts),
+                (symbol, timeframe, signal_ts, timeframe),
             )
             candle = cur.fetchone()
             if candle:
