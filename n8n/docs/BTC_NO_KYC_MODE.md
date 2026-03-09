@@ -21,6 +21,12 @@ sh n8n/scripts/no_kyc_lockdown.sh
 sh n8n/scripts/no_kyc_cycle.sh
 ```
 
+3. Activar automatizacion cada 15 minutos (cron):
+
+```bash
+sh n8n/scripts/no_kyc_cron_install.sh
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`
@@ -33,6 +39,7 @@ sh n8n/scripts/no_kyc_cycle.sh
 
 - Ejecutar `no_kyc_lockdown.sh` al inicio de sesion.
 - Ejecutar `no_kyc_cycle.sh` en cada ronda operativa (o cron).
+- Ver logs del cron en `n8n/logs/no_kyc_cycle.log`.
 - Mantener seguimiento via:
   - `GET /ops/summary`
   - `POST /paper/go-no-go`

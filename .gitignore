@@ -10,6 +10,7 @@ n8n/.env.trading
 # n8n runtime data (db, logs, volatile state)
 n8n/data/
 n8n/postgres/
+n8n/logs/
 
 # editor/system noise
 .DS_Store
