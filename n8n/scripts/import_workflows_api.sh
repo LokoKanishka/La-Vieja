@@ -2,7 +2,20 @@
 set -euo pipefail
 
 if [[ -z "${N8N_API_KEY:-}" ]]; then
-  echo "Falta N8N_API_KEY en el entorno." >&2
+  if docker ps --format '{{.Names}}' | grep -qx 'btc_postgres'; then
+    api_key_from_db="$(
+      docker exec btc_postgres psql -U n8n -d n8n -At -c \
+        "select \"apiKey\" from user_api_keys order by \"createdAt\" desc limit 1;" 2>/dev/null || true
+    )"
+    if [[ -n "${api_key_from_db}" ]]; then
+      export N8N_API_KEY="${api_key_from_db}"
+      echo "N8N_API_KEY cargada automaticamente desde btc_postgres."
+    fi
+  fi
+fi
+
+if [[ -z "${N8N_API_KEY:-}" ]]; then
+  echo "Falta N8N_API_KEY en el entorno y no se pudo obtener desde btc_postgres." >&2
   exit 1
 fi
 
