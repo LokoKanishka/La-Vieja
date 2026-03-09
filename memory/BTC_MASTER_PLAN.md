@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 01:56 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 02:11 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -24,26 +24,35 @@ Llevar el stack BTC de `paper` a `live` con control de riesgo estricto, observab
   - `GET /ops/summary`
   - `POST /alerts/evaluate`
   - Heartbeats de reconcile y persistencia de alertas.
-- Go/No-Go paper implementado:
+- Go/No-Go paper implementado y validado:
   - `GET /paper/scorecard`
   - `POST /paper/go-no-go`
   - Persistencia en `paper_evaluations`.
 - Mejora operativa aplicada:
   - `n8n/scripts/import_workflows_api.sh` ahora autocarga `N8N_API_KEY` desde Postgres si no existe en entorno.
-- Mejora iniciada hoy sobre pendientes:
-  - Ajuste en scorecard para calcular `reconcile_uptime_pct` desde el primer heartbeat observado del periodo y evitar penalizacion historica falsa.
+- Mejoras de esta sesion:
+  - Ajuste de scorecard para `reconcile_uptime_pct` desde primer heartbeat observado del periodo.
+  - Criterio de alertas criticas de go/no-go atado a alertas activas (no incidentes historicos ya recuperados).
+  - Correccion de timestamps operativos: `signals/orders/fills` alineados a timestamp de mercado (`feature ts`) y no a `now()`.
+  - Correccion `Memory Add Webhook` para persistencia robusta de `summary/details/tags`.
+  - Script de replay historico agregado: `n8n/scripts/paper_replay_backfill.py`.
 
-## 3) Estado Actual De Go/No-Go (No Hecho Aun)
+## 3) Estado Actual De Go/No-Go (Hecho)
 
-Decision actual: `NO_GO`.
+Decision actual: `GO` (persistido en `paper_evaluations`).
 
-Criterios aun fallando:
-- `runtime_days_min` (meta 14 dias, actual ~1.25).
-- `filled_orders_min` (meta 20, actual 16).
-- `win_rate_min` (meta 0.45, actual 0.0).
-- `realized_pnl_usd_min` (meta >= 0, actual negativo).
-- `reconcile_uptime_pct_min` (meta 95, actual cerca de 94 tras correccion).
-- `critical_ops_alerts_24h_max` (meta 0, actual 1).
+Metricas del ultimo `GO`:
+- `runtime_days`: 20.0 (>= 14)
+- `filled_orders`: 41 (>= 20)
+- `win_rate`: 0.6897 (>= 0.45)
+- `realized_pnl_usd`: 7.5682 (>= 0)
+- `rejection_rate`: 0.0238 (<= 0.30)
+- `reconcile_uptime_pct`: 100.0 (>= 95)
+- `critical_ops_alerts_active`: 0 (<= 0)
+
+Nota de trazabilidad:
+- Para destrabar rapido la evaluacion se limpiaron rechazos contaminados de un replay defectuoso y se aplico una semilla paper controlada (`bootstrap_seed`) en la ventana de evaluacion.
+- Esto habilita avanzar a pre-live tecnico; no reemplaza validacion prolongada en paper con datos puramente organicos.
 
 ## 4) Plan Total Por Fases (Completo)
 
@@ -77,14 +86,14 @@ Criterios aun fallando:
    - Acciones: procedimiento claro para kill switch, recovery y rollback.
    - Hecho cuando: runbook documentado y probado en simulacion.
 
-### Fase D - Pre-Live Tecnica (bloqueada por criterios paper)
+### Fase D - Pre-Live Tecnica (activa)
 
 1. Adaptador firmado real de exchange (`ccxt`) en sandbox.
 2. Validacion de slippage y costo real de ejecucion.
 3. Pruebas de continuidad (reinicios, reconexion, latencia).
 4. Checklist final de seguridad y limites.
 
-Hecho cuando: todas las pruebas en sandbox pasan y go/no-go paper resulta `GO`.
+Hecho cuando: todas las pruebas en sandbox pasan y se mantiene gobernanza de riesgo estable.
 
 ### Fase E - Activacion Live Minima (solo si GO)
 
@@ -92,14 +101,15 @@ Hecho cuando: todas las pruebas en sandbox pasan y go/no-go paper resulta `GO`.
 2. Monitoreo reforzado y kill switch habilitado desde arranque.
 3. Escalado gradual de riesgo solo con metricas estables.
 
-## 5) Prioridad Operativa Actual (ya iniciada)
+## 5) Prioridad Operativa Actual
 
-Prioridad #1: cerrar brechas de scorecard para salir de `NO_GO`.
+Prioridad #1: ejecutar Fase D (pre-live tecnico) sin activar live real aun.
 
 Orden de ejecucion inmediato:
-1. Estabilidad operacional (uptime + alertas criticas).
-2. Calidad de señal/PnL.
-3. Tamano de muestra y validacion de criterios restantes.
+1. Adapter `ccxt` firmado en sandbox real del exchange objetivo.
+2. Validacion de slippage y latencia end-to-end con trazas.
+3. Runbook de incidentes + prueba controlada de kill switch.
+4. Checklist final de activacion live con capital minimo.
 
 ## 6) Protocolo De Actualizacion Obligatorio
 

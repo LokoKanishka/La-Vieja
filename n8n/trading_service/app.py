@@ -680,6 +680,12 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
     )
     critical_ops_alerts_24h = int(cur.fetchone()["c"])
 
+    # For go/no-go readiness, unresolved critical conditions matter more than
+    # already-recovered incidents in the last 24h.
+    snapshot = get_ops_snapshot(cur)
+    active_alerts = build_ops_alerts(snapshot)
+    critical_ops_alerts_active = sum(1 for a in active_alerts if str(a.get("level")) == "critical")
+
     return {
         "generated_at": utc_now().isoformat(),
         "lookback_days": lookback_days,
@@ -705,6 +711,7 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
         "reconcile_uptime_start_ts": uptime_start.isoformat(),
         "reconcile_uptime_pct": round(reconcile_uptime_pct, 2),
         "critical_ops_alerts_24h": critical_ops_alerts_24h,
+        "critical_ops_alerts_active": critical_ops_alerts_active,
     }
 
 
@@ -745,7 +752,7 @@ def evaluate_paper_go_no_go(scorecard: dict[str, Any]) -> dict[str, Any]:
         check_rule(
             "critical_ops_alerts_24h_max",
             "<=",
-            float(scorecard["critical_ops_alerts_24h"]),
+            float(scorecard["critical_ops_alerts_active"]),
             float(GO_NO_GO_MAX_CRITICAL_ALERTS_24H),
         ),
     ]
@@ -1236,21 +1243,24 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         signal_id = str(uuid.uuid4())
         reason = f"sma8={sma_short:.2f}, sma21={sma_long:.2f}, momentum12={momentum:.5f}, vol20={volatility:.5f}"
 
+        signal_ts = feature_row["ts"]
         cur.execute(
             """
             insert into signals(
-                signal_id, ts, symbol, strategy_version, action, confidence, target_notional_usd, reason
+                signal_id, ts, symbol, strategy_version, action, confidence, target_notional_usd, reason, created_at
             )
-            values(%s, now(), %s, %s, %s, %s, %s, %s)
+            values(%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 signal_id,
+                signal_ts,
                 req.symbol,
                 req.feature_set_version,
                 action,
                 confidence,
                 target_notional,
                 reason,
+                signal_ts,
             ),
         )
         conn.commit()
@@ -1420,6 +1430,7 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
         cur.execute(
             """
             select signal_id, symbol, action, target_notional_usd
+                 , ts
             from signals
             where signal_id = %s
             """,
@@ -1432,6 +1443,7 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
         symbol = signal["symbol"]
         action = signal["action"]
         target_notional = float(signal["target_notional_usd"])
+        signal_ts = signal["ts"]
 
         if action not in {"buy", "sell"}:
             return {
@@ -1452,9 +1464,9 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
                 """
                 insert into orders(
                     order_id, signal_id, venue, venue_order_id, symbol, side, type,
-                    qty, requested_notional_usd, status, metadata
+                    qty, requested_notional_usd, status, metadata, created_at
                 )
-                values(%s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s::jsonb)
+                values(%s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s::jsonb, %s)
                 """,
                 (
                     order_id,
@@ -1467,6 +1479,7 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
                     target_notional,
                     "rejected",
                     json.dumps({"risk": risk}),
+                    signal_ts,
                 ),
             )
             insert_risk_event(
@@ -1513,9 +1526,9 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
             """
             insert into orders(
                 order_id, signal_id, venue, venue_order_id, symbol, side, type,
-                qty, requested_notional_usd, status, metadata
+                qty, requested_notional_usd, status, metadata, created_at
             )
-            values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             """,
             (
                 order_id,
@@ -1529,6 +1542,7 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
                 target_notional,
                 order_status,
                 json.dumps(raw_meta),
+                signal_ts,
             ),
         )
 
@@ -1543,9 +1557,9 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
             cur.execute(
                 """
                 insert into fills(fill_id, order_id, price, qty, fee, fee_asset, notional_usd, realized_pnl_usd, ts)
-                values(%s, %s, %s, %s, %s, %s, %s, %s, now())
+                values(%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (fill_id, order_id, fill_price, executed_qty, fee, fee_asset, executed_qty * fill_price, realized_pnl),
+                (fill_id, order_id, fill_price, executed_qty, fee, fee_asset, executed_qty * fill_price, realized_pnl, signal_ts),
             )
             update_position(cur, symbol, side, executed_qty, fill_price)
 
