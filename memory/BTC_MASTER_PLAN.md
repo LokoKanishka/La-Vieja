@@ -111,6 +111,11 @@ Orden de ejecucion inmediato:
 3. Runbook de incidentes + prueba controlada de kill switch.
 4. Checklist final de activacion live con capital minimo.
 
+Bloqueos actuales detectados (02:12):
+- `EXCHANGE_ADAPTER` aun no esta en `ccxt`.
+- Faltan `EXCHANGE_API_KEY` y `EXCHANGE_API_SECRET`.
+- `EXCHANGE_SANDBOX` no esta en `true`.
+
 ## 6) Protocolo De Actualizacion Obligatorio
 
 En cada sesion nueva:
