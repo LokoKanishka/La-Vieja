@@ -15,7 +15,17 @@ cd "${ROOT_DIR}"
 ok=0
 fail=0
 
-signal_ids="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "select signal_id from signals order by ts desc limit ${LIMIT};")"
+signal_ids="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "
+select signal_id
+from (
+  select distinct on (symbol, ts, strategy_version)
+    signal_id, ts
+  from signals
+  order by symbol, ts, strategy_version, created_at desc, signal_id desc
+) s
+order by ts desc
+limit ${LIMIT};
+")"
 
 while IFS= read -r signal_id; do
   [ -z "${signal_id}" ] && continue

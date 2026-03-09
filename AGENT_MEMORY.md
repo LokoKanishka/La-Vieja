@@ -70,6 +70,9 @@
   - `n8n/scripts/hybrid_backfill_shadow.sh`
   - `n8n/scripts/no_kyc_intents_autocancel.sh`
   - `n8n/scripts/hybrid_hourly_report.sh`
+- Ajuste crítico reciente:
+  - `POST /signal/evaluate` ahora evita duplicar señales por la misma vela y reutiliza `signal_id`.
+  - `n8n/scripts/hybrid_backfill_shadow.sh` ahora selecciona señales únicas por vela para score híbrido más limpio.
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

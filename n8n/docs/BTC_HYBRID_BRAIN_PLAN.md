@@ -37,6 +37,9 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
    - `n8n/scripts/hybrid_hourly_report.sh`
    - `n8n/scripts/no_kyc_intents_autocancel.sh`
 5. `no_kyc_cycle.sh` y `full_test_no_kyc.sh` incluyen score y alertas híbridas.
+6. Calidad de muestra:
+   - `POST /signal/evaluate` es idempotente por vela (`ts+symbol+strategy_version`), evitando señales duplicadas.
+   - `hybrid_backfill_shadow.sh` usa señales únicas por vela (`DISTINCT ON`) para no inflar decisiones repetidas.
 
 ## Política De Decisión Híbrida (actual)
 

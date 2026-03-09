@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 05:06 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 05:13 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -73,6 +73,12 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - muestra construida: `decisions_with_outcome=137` (objetivo mínimo 50 superado)
     - intents abiertos limpiados (`no_kyc_intents_autocancel.sh --all`, `remaining_open=0`)
     - control horario activo: workflow `BTC Hybrid Hourly Report 1h` + endpoint `POST /hybrid/alerts/evaluate`
+  - Calidad de muestra híbrida reforzada:
+    - `POST /signal/evaluate` ahora es idempotente por vela (`ts+symbol+strategy_version`) y reutiliza `signal_id` existente.
+    - `n8n/scripts/hybrid_backfill_shadow.sh` ahora toma señales únicas por vela (`DISTINCT ON`) para evitar sobreconteo por duplicados.
+  - Verificación operativa de esta sesión:
+    - `git push origin main`: remoto al día.
+    - `bash n8n/scripts/full_test_no_kyc.sh`: `failed=0 warn=1` (warn esperado por bloqueo pre-live en modo NO-KYC).
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 

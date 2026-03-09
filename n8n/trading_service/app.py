@@ -1765,6 +1765,51 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         signal_ts = feature_row["ts"]
         cur.execute(
             """
+            select signal_id
+            from signals
+            where ts = %s
+              and symbol = %s
+              and strategy_version = %s
+            order by created_at desc, signal_id desc
+            limit 1
+            """,
+            (signal_ts, req.symbol, req.feature_set_version),
+        )
+        existing_signal = cur.fetchone()
+
+        if existing_signal:
+            signal_id = str(existing_signal["signal_id"])
+            cur.execute(
+                """
+                update signals
+                set action = %s,
+                    confidence = %s,
+                    target_notional_usd = %s,
+                    reason = %s
+                where signal_id = %s
+                """,
+                (
+                    action,
+                    confidence,
+                    target_notional,
+                    reason,
+                    signal_id,
+                ),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "signal_id": signal_id,
+                "symbol": req.symbol,
+                "action": action,
+                "confidence": round(confidence, 4),
+                "target_notional_usd": round(target_notional, 2),
+                "reason": reason,
+                "deduped": True,
+            }
+
+        cur.execute(
+            """
             insert into signals(
                 signal_id, ts, symbol, strategy_version, action, confidence, target_notional_usd, reason, created_at
             )
@@ -1792,6 +1837,7 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         "confidence": round(confidence, 4),
         "target_notional_usd": round(target_notional, 2),
         "reason": reason,
+        "deduped": False,
     }
 
 
