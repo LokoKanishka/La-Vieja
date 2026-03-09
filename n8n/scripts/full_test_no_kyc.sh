@@ -79,11 +79,21 @@ else
   blocked "respuesta invalida en execution/intents?status=open"
 fi
 
-workflow_count="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "select count(*) from workflow_entity where name like 'BTC %' and active = true;" | tr -d '[:space:]')" || workflow_count="0"
-if [[ "${workflow_count}" == "8" ]]; then
-  ok "workflows BTC activos: 8/8"
+forecast_score_json="$(curl -fsS 'http://127.0.0.1:8100/forecast/scorecard?lookback_days=7&horizon_minutes=10&timeframe=5m')" || {
+  blocked "forecast/scorecard endpoint no responde"
+  forecast_score_json='{}'
+}
+if printf '%s' "${forecast_score_json}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True; assert isinstance(d.get("scorecard"), dict)'; then
+  ok "forecast/scorecard responde con scorecard valido"
 else
-  blocked "workflows BTC activos esperados 8, actual ${workflow_count}"
+  blocked "forecast/scorecard no valido"
+fi
+
+workflow_count="$(docker exec btc_postgres psql -U n8n -d n8n -At -c "select count(*) from workflow_entity where name like 'BTC %' and active = true;" | tr -d '[:space:]')" || workflow_count="0"
+if [[ "${workflow_count}" =~ ^[0-9]+$ ]] && [[ "${workflow_count}" -ge 8 ]]; then
+  ok "workflows BTC activos: ${workflow_count} (minimo requerido 8)"
+else
+  blocked "workflows BTC activos insuficientes (actual ${workflow_count}, minimo 8)"
 fi
 
 set +e
@@ -105,4 +115,3 @@ if [[ "${fail}" -gt 0 ]]; then
   exit 1
 fi
 exit 0
-

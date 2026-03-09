@@ -186,3 +186,31 @@ create index if not exists idx_external_execution_intents_status_created
 
 create index if not exists idx_external_execution_intents_txid
   on external_execution_intents (txid);
+
+create table if not exists forecast_checks (
+  forecast_id uuid primary key,
+  signal_id uuid not null references signals(signal_id),
+  signal_ts timestamptz not null,
+  symbol text not null,
+  timeframe text not null,
+  predicted_action text not null check (predicted_action in ('buy', 'sell', 'hold')),
+  predicted_confidence numeric not null,
+  horizon_minutes int not null,
+  min_move_bps numeric not null default 0,
+  entry_price numeric not null,
+  due_ts timestamptz not null,
+  resolved_ts timestamptz,
+  resolved_price numeric,
+  price_change_bps numeric,
+  outcome text not null check (outcome in ('pending', 'hit', 'miss', 'expired')),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(signal_id, timeframe, horizon_minutes)
+);
+
+create index if not exists idx_forecast_checks_outcome_due
+  on forecast_checks (outcome, due_ts asc);
+
+create index if not exists idx_forecast_checks_created
+  on forecast_checks (created_at desc);

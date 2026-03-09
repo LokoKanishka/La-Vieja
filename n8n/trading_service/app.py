@@ -46,6 +46,10 @@ GO_NO_GO_MIN_REALIZED_PNL_USD = float(os.getenv("GO_NO_GO_MIN_REALIZED_PNL_USD",
 GO_NO_GO_MAX_REJECTION_RATE = float(os.getenv("GO_NO_GO_MAX_REJECTION_RATE", "0.30"))
 GO_NO_GO_MIN_RECONCILE_UPTIME_PCT = float(os.getenv("GO_NO_GO_MIN_RECONCILE_UPTIME_PCT", "95"))
 GO_NO_GO_MAX_CRITICAL_ALERTS_24H = int(os.getenv("GO_NO_GO_MAX_CRITICAL_ALERTS_24H", "0"))
+FORECAST_DEFAULT_HORIZON_MINUTES = int(os.getenv("FORECAST_DEFAULT_HORIZON_MINUTES", "10"))
+FORECAST_MIN_MOVE_BPS = float(os.getenv("FORECAST_MIN_MOVE_BPS", "5"))
+FORECAST_MAX_RESOLUTION_LAG_MINUTES = int(os.getenv("FORECAST_MAX_RESOLUTION_LAG_MINUTES", "20"))
+FORECAST_GO_MIN_ACCURACY = float(os.getenv("FORECAST_GO_MIN_ACCURACY", "0.55"))
 
 EXCHANGE_ADAPTER = os.getenv("EXCHANGE_ADAPTER", "paper").lower()
 EXCHANGE_ID = os.getenv("EXCHANGE_ID", "kraken")
@@ -156,6 +160,20 @@ class PaperGoNoGoRequest(BaseModel):
     lookback_days: int = PAPER_GO_NO_GO_LOOKBACK_DAYS
     persist: bool = True
     include_scorecard: bool = True
+
+
+class ForecastCheckpointRequest(BaseModel):
+    signal_id: str
+    horizon_minutes: int = FORECAST_DEFAULT_HORIZON_MINUTES
+    min_move_bps: float = FORECAST_MIN_MOVE_BPS
+    timeframe: str = MONITORED_TIMEFRAME
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ForecastEvaluateDueRequest(BaseModel):
+    limit: int = 200
+    max_resolution_lag_minutes: int = FORECAST_MAX_RESOLUTION_LAG_MINUTES
+    persist_events: bool = True
 
 
 def utc_now() -> datetime:
@@ -270,6 +288,43 @@ def bootstrap_runtime_schema() -> None:
             """
             create index if not exists idx_external_execution_intents_txid
             on external_execution_intents(txid)
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists forecast_checks (
+              forecast_id uuid primary key,
+              signal_id uuid not null references signals(signal_id),
+              signal_ts timestamptz not null,
+              symbol text not null,
+              timeframe text not null,
+              predicted_action text not null check (predicted_action in ('buy', 'sell', 'hold')),
+              predicted_confidence numeric not null,
+              horizon_minutes int not null,
+              min_move_bps numeric not null default 0,
+              entry_price numeric not null,
+              due_ts timestamptz not null,
+              resolved_ts timestamptz,
+              resolved_price numeric,
+              price_change_bps numeric,
+              outcome text not null check (outcome in ('pending', 'hit', 'miss', 'expired')),
+              metadata jsonb not null default '{}'::jsonb,
+              created_at timestamptz not null default now(),
+              updated_at timestamptz not null default now(),
+              unique(signal_id, timeframe, horizon_minutes)
+            )
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_forecast_checks_outcome_due
+            on forecast_checks(outcome, due_ts asc)
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_forecast_checks_created
+            on forecast_checks(created_at desc)
             """
         )
         cur.execute(
@@ -1008,6 +1063,112 @@ def normalize_intent_status(status: str) -> str:
     raise HTTPException(status_code=400, detail="status debe ser filled|rejected|canceled")
 
 
+def forecast_outcome_for_move(action: str, price_change_bps: float, min_move_bps: float) -> str:
+    if action == "buy":
+        return "hit" if price_change_bps >= min_move_bps else "miss"
+    if action == "sell":
+        return "hit" if price_change_bps <= -min_move_bps else "miss"
+    return "hit" if abs(price_change_bps) <= min_move_bps else "miss"
+
+
+def forecast_edge_bps(action: str, price_change_bps: float) -> float:
+    if action == "buy":
+        return price_change_bps
+    if action == "sell":
+        return -price_change_bps
+    return -abs(price_change_bps)
+
+
+def build_forecast_scorecard(
+    cur: psycopg.Cursor,
+    lookback_days: int,
+    horizon_minutes: int | None,
+    timeframe: str | None,
+) -> dict[str, Any]:
+    window_start = utc_now() - timedelta(days=lookback_days)
+    cur.execute(
+        """
+        select forecast_id, predicted_action, price_change_bps, outcome
+        from forecast_checks
+        where created_at >= %s
+          and (%s::int is null or horizon_minutes = %s)
+          and (%s::text is null or timeframe = %s)
+        """,
+        (window_start, horizon_minutes, horizon_minutes, timeframe, timeframe),
+    )
+    rows = cur.fetchall()
+
+    total = len(rows)
+    pending = 0
+    expired = 0
+    resolved = 0
+    hits = 0
+    misses = 0
+    edge_values: list[float] = []
+    action_stats: dict[str, dict[str, Any]] = {
+        "buy": {"resolved": 0, "hits": 0, "avg_price_change_bps": None},
+        "sell": {"resolved": 0, "hits": 0, "avg_price_change_bps": None},
+        "hold": {"resolved": 0, "hits": 0, "avg_price_change_bps": None},
+    }
+    action_changes: dict[str, list[float]] = {"buy": [], "sell": [], "hold": []}
+
+    for row in rows:
+        outcome = str(row["outcome"])
+        action = str(row["predicted_action"])
+        if outcome == "pending":
+            pending += 1
+            continue
+        if outcome == "expired":
+            expired += 1
+            continue
+
+        resolved += 1
+        change_bps = float(row["price_change_bps"] or 0.0)
+        action_changes.setdefault(action, []).append(change_bps)
+        if action in action_stats:
+            action_stats[action]["resolved"] += 1
+        edge_values.append(forecast_edge_bps(action, change_bps))
+        if outcome == "hit":
+            hits += 1
+            if action in action_stats:
+                action_stats[action]["hits"] += 1
+        else:
+            misses += 1
+
+    for action, changes in action_changes.items():
+        if action not in action_stats:
+            continue
+        if changes:
+            action_stats[action]["avg_price_change_bps"] = round(sum(changes) / len(changes), 4)
+        resolved_count = int(action_stats[action]["resolved"])
+        if resolved_count > 0:
+            action_stats[action]["accuracy"] = round(float(action_stats[action]["hits"]) / resolved_count, 4)
+        else:
+            action_stats[action]["accuracy"] = None
+
+    accuracy = (hits / resolved) if resolved > 0 else None
+    avg_edge_bps = (sum(edge_values) / len(edge_values)) if edge_values else None
+    predictive_go = bool(accuracy is not None and avg_edge_bps is not None and accuracy >= FORECAST_GO_MIN_ACCURACY and avg_edge_bps > 0)
+
+    return {
+        "generated_at": utc_now().isoformat(),
+        "lookback_days": lookback_days,
+        "window_start": window_start.isoformat(),
+        "filters": {"horizon_minutes": horizon_minutes, "timeframe": timeframe},
+        "total_forecasts": total,
+        "resolved_forecasts": resolved,
+        "pending_forecasts": pending,
+        "expired_forecasts": expired,
+        "hits": hits,
+        "misses": misses,
+        "accuracy": None if accuracy is None else round(accuracy, 4),
+        "avg_edge_bps": None if avg_edge_bps is None else round(avg_edge_bps, 4),
+        "go_threshold_accuracy": FORECAST_GO_MIN_ACCURACY,
+        "predictive_go": predictive_go,
+        "by_action": action_stats,
+    }
+
+
 def electrum_best_receive_address() -> str | None:
     if not ENABLE_ELECTRUM_RPC:
         return None
@@ -1353,6 +1514,322 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         "target_notional_usd": round(target_notional, 2),
         "reason": reason,
     }
+
+
+@app.post("/forecast/checkpoint")
+def forecast_checkpoint(req: ForecastCheckpointRequest) -> dict[str, Any]:
+    horizon = int(req.horizon_minutes)
+    min_move_bps = float(req.min_move_bps)
+    timeframe = (req.timeframe or "").strip() or MONITORED_TIMEFRAME
+
+    if horizon < 1 or horizon > 120:
+        raise HTTPException(status_code=400, detail="horizon_minutes debe estar entre 1 y 120")
+    if min_move_bps < 0 or min_move_bps > 1000:
+        raise HTTPException(status_code=400, detail="min_move_bps fuera de rango (0..1000)")
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select signal_id, ts, symbol, action, confidence
+            from signals
+            where signal_id = %s
+            """,
+            (req.signal_id,),
+        )
+        signal = cur.fetchone()
+        if not signal:
+            raise HTTPException(status_code=404, detail="signal_id no encontrado")
+
+        action = str(signal["action"])
+        if action not in {"buy", "sell", "hold"}:
+            raise HTTPException(status_code=400, detail="accion de señal invalida para forecast")
+
+        symbol = str(signal["symbol"])
+        signal_ts = signal["ts"]
+        confidence = float(signal["confidence"])
+
+        cur.execute(
+            """
+            select ts, close
+            from market_candles
+            where symbol = %s and timeframe = %s and ts <= %s
+            order by ts desc
+            limit 1
+            """,
+            (symbol, timeframe, signal_ts),
+        )
+        candle = cur.fetchone()
+        if not candle:
+            raise HTTPException(status_code=409, detail="no hay vela para fijar entry_price del forecast")
+
+        entry_price = float(candle["close"])
+        due_ts = signal_ts + timedelta(minutes=horizon)
+        forecast_id = str(uuid.uuid4())
+        metadata = dict(req.metadata or {})
+
+        cur.execute(
+            """
+            insert into forecast_checks(
+                forecast_id, signal_id, signal_ts, symbol, timeframe, predicted_action, predicted_confidence,
+                horizon_minutes, min_move_bps, entry_price, due_ts, outcome, metadata, created_at, updated_at
+            )
+            values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s::jsonb, now(), now())
+            on conflict(signal_id, timeframe, horizon_minutes) do nothing
+            returning forecast_id, due_ts
+            """,
+            (
+                forecast_id,
+                req.signal_id,
+                signal_ts,
+                symbol,
+                timeframe,
+                action,
+                confidence,
+                horizon,
+                min_move_bps,
+                entry_price,
+                due_ts,
+                json.dumps(metadata),
+            ),
+        )
+        inserted = cur.fetchone()
+
+        if inserted:
+            conn.commit()
+            return {
+                "ok": True,
+                "created": True,
+                "forecast_id": str(inserted["forecast_id"]),
+                "signal_id": req.signal_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "action": action,
+                "confidence": round(confidence, 4),
+                "horizon_minutes": horizon,
+                "min_move_bps": round(min_move_bps, 4),
+                "entry_price": round(entry_price, 6),
+                "signal_ts": signal_ts.isoformat(),
+                "due_ts": inserted["due_ts"].isoformat(),
+            }
+
+        cur.execute(
+            """
+            select forecast_id, due_ts, outcome, entry_price
+            from forecast_checks
+            where signal_id = %s
+              and timeframe = %s
+              and horizon_minutes = %s
+            limit 1
+            """,
+            (req.signal_id, timeframe, horizon),
+        )
+        existing = cur.fetchone()
+        return {
+            "ok": True,
+            "created": False,
+            "forecast_id": str(existing["forecast_id"]),
+            "signal_id": req.signal_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "action": action,
+            "confidence": round(confidence, 4),
+            "horizon_minutes": horizon,
+            "min_move_bps": round(min_move_bps, 4),
+            "entry_price": round(float(existing["entry_price"]), 6),
+            "signal_ts": signal_ts.isoformat(),
+            "due_ts": existing["due_ts"].isoformat(),
+            "status": str(existing["outcome"]),
+        }
+
+
+@app.post("/forecast/evaluate-due")
+def forecast_evaluate_due(req: ForecastEvaluateDueRequest) -> dict[str, Any]:
+    cap = max(1, min(int(req.limit), 1000))
+    max_lag = int(req.max_resolution_lag_minutes)
+    if max_lag < 1 or max_lag > 240:
+        raise HTTPException(status_code=400, detail="max_resolution_lag_minutes debe estar entre 1 y 240")
+
+    evaluated = 0
+    hits = 0
+    misses = 0
+    expired = 0
+    still_pending = 0
+    samples: list[dict[str, Any]] = []
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            select forecast_id, signal_id, symbol, timeframe, predicted_action, min_move_bps,
+                   entry_price, due_ts
+            from forecast_checks
+            where outcome = 'pending'
+              and due_ts <= now()
+            order by due_ts asc
+            limit %s
+            for update skip locked
+            """,
+            (cap,),
+        )
+        rows = cur.fetchall()
+
+        for row in rows:
+            forecast_id = str(row["forecast_id"])
+            symbol = str(row["symbol"])
+            timeframe = str(row["timeframe"])
+            action = str(row["predicted_action"])
+            due_ts = row["due_ts"]
+            entry_price = float(row["entry_price"])
+            min_move_bps = float(row["min_move_bps"])
+
+            cur.execute(
+                """
+                select ts, close
+                from market_candles
+                where symbol = %s
+                  and timeframe = %s
+                  and ts >= %s
+                order by ts asc
+                limit 1
+                """,
+                (symbol, timeframe, due_ts),
+            )
+            resolution = cur.fetchone()
+            if not resolution:
+                lag_minutes = minutes_since(due_ts)
+                if lag_minutes is not None and lag_minutes > max_lag:
+                    cur.execute(
+                        """
+                        update forecast_checks
+                        set outcome = 'expired',
+                            resolved_ts = now(),
+                            updated_at = now()
+                        where forecast_id = %s
+                        """,
+                        (forecast_id,),
+                    )
+                    expired += 1
+                else:
+                    still_pending += 1
+                continue
+
+            resolved_ts = resolution["ts"]
+            resolved_price = float(resolution["close"])
+            if entry_price <= 0:
+                cur.execute(
+                    """
+                    update forecast_checks
+                    set outcome = 'expired',
+                        resolved_ts = %s,
+                        resolved_price = %s,
+                        updated_at = now()
+                    where forecast_id = %s
+                    """,
+                    (resolved_ts, resolved_price, forecast_id),
+                )
+                expired += 1
+                continue
+
+            change_bps = ((resolved_price - entry_price) / entry_price) * 10000.0
+            outcome = forecast_outcome_for_move(action, change_bps, min_move_bps)
+            cur.execute(
+                """
+                update forecast_checks
+                set outcome = %s,
+                    resolved_ts = %s,
+                    resolved_price = %s,
+                    price_change_bps = %s,
+                    updated_at = now()
+                where forecast_id = %s
+                """,
+                (outcome, resolved_ts, resolved_price, change_bps, forecast_id),
+            )
+
+            evaluated += 1
+            if outcome == "hit":
+                hits += 1
+            else:
+                misses += 1
+
+            if req.persist_events:
+                insert_risk_event(
+                    cur,
+                    rule=f"forecast_{outcome}",
+                    severity="info" if outcome == "hit" else "warning",
+                    context={
+                        "forecast_id": forecast_id,
+                        "signal_id": row["signal_id"],
+                        "action": action,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "due_ts": due_ts.isoformat(),
+                        "resolved_ts": resolved_ts.isoformat(),
+                        "entry_price": entry_price,
+                        "resolved_price": resolved_price,
+                        "price_change_bps": round(change_bps, 4),
+                        "min_move_bps": min_move_bps,
+                        "outcome": outcome,
+                    },
+                )
+
+            if len(samples) < 20:
+                samples.append(
+                    {
+                        "forecast_id": forecast_id,
+                        "action": action,
+                        "outcome": outcome,
+                        "price_change_bps": round(change_bps, 4),
+                        "due_ts": due_ts.isoformat(),
+                        "resolved_ts": resolved_ts.isoformat(),
+                    }
+                )
+
+        conn.commit()
+
+        cur.execute(
+            """
+            select count(*) as c
+            from forecast_checks
+            where outcome = 'pending'
+              and due_ts <= now()
+            """
+        )
+        due_pending_count = int(cur.fetchone()["c"])
+
+    accuracy = (hits / evaluated) if evaluated > 0 else None
+    return {
+        "ok": True,
+        "evaluated": evaluated,
+        "hits": hits,
+        "misses": misses,
+        "expired": expired,
+        "still_pending_without_price": still_pending,
+        "due_pending_count": due_pending_count,
+        "accuracy": None if accuracy is None else round(accuracy, 4),
+        "samples": samples,
+    }
+
+
+@app.get("/forecast/scorecard")
+def forecast_scorecard(
+    lookback_days: int = 14,
+    horizon_minutes: int | None = None,
+    timeframe: str | None = None,
+) -> dict[str, Any]:
+    if lookback_days < 1 or lookback_days > 120:
+        raise HTTPException(status_code=400, detail="lookback_days debe estar entre 1 y 120")
+    if horizon_minutes is not None and (horizon_minutes < 1 or horizon_minutes > 120):
+        raise HTTPException(status_code=400, detail="horizon_minutes debe estar entre 1 y 120")
+
+    tf = None
+    if timeframe is not None:
+        tf = timeframe.strip()
+        if not tf:
+            tf = None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        scorecard = build_forecast_scorecard(cur, lookback_days, horizon_minutes, tf)
+
+    return {"ok": True, "scorecard": scorecard}
 
 
 @app.post("/risk/check")

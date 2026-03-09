@@ -45,6 +45,7 @@ Workflows incluidos:
 - `BTC Ops Monitor 1m`
 - `BTC Paper Go No-Go Daily`
 - `BTC Intents Reconcile Electrum 5m`
+- `BTC Forecast Validate 5m`
 
 ## 3) Proceso automático
 
@@ -74,6 +75,9 @@ Workflows incluidos:
 - `POST /execution/intent/confirm`
 - `GET /execution/intents`
 - `POST /execution/intents/reconcile-electrum`
+- `POST /forecast/checkpoint`
+- `POST /forecast/evaluate-due`
+- `GET /forecast/scorecard`
 - `POST /reconcile`
 - `POST /custody/sweep`
 - `GET /electrum/balance`
@@ -129,6 +133,10 @@ Variables de control de riesgo:
 - `GO_NO_GO_MAX_REJECTION_RATE=0.30`
 - `GO_NO_GO_MIN_RECONCILE_UPTIME_PCT=95`
 - `GO_NO_GO_MAX_CRITICAL_ALERTS_24H=0`
+- `FORECAST_DEFAULT_HORIZON_MINUTES=10`
+- `FORECAST_MIN_MOVE_BPS=5`
+- `FORECAST_MAX_RESOLUTION_LAG_MINUTES=20`
+- `FORECAST_GO_MIN_ACCURACY=0.55`
 
 Kill switch y pérdida diaria:
 
@@ -143,6 +151,16 @@ Go / No-Go (paper):
 - `GET /paper/scorecard` calcula métricas del período (P&L realizado, drawdown, win rate, rechazo y uptime reconcile).
 - `POST /paper/go-no-go` evalúa umbrales de paso a `live` y puede persistir historial en `paper_evaluations`.
 - El workflow `BTC Paper Go No-Go Daily` ejecuta esta evaluación diariamente y guarda decisión `go|no_go`.
+
+Validacion de prediccion a futuro (5-10m):
+
+- `POST /forecast/checkpoint` guarda la prediccion con vencimiento (por ejemplo +10m).
+- `POST /forecast/evaluate-due` compara la prediccion vencida contra precio real y marca `hit|miss|expired`.
+- `GET /forecast/scorecard` resume accuracy y edge estadistico por ventana.
+- Regla de lectura rapida:
+  - `accuracy` mide aciertos reales.
+  - `avg_edge_bps` > 0 indica ventaja direccional neta.
+  - `predictive_go=true` cuando supera umbral (`FORECAST_GO_MIN_ACCURACY`) y edge positivo.
 
 Antes de operar en `live`:
 

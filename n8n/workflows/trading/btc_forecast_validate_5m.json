@@ -1,0 +1,116 @@
+{
+  "name": "BTC Forecast Validate 5m",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Forecast_5m",
+      "name": "cron-btc-forecast-5m",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/features/build",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\",\"timeframe\":\"5m\",\"lookback\":96} }}",
+        "options": {}
+      },
+      "id": "Http_Forecast_Build_Features",
+      "name": "Build Features 5m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/signal/evaluate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"symbol\":\"BTCUSD\"} }}",
+        "options": {}
+      },
+      "id": "Http_Forecast_Evaluate_Signal",
+      "name": "Evaluate Signal 5m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/forecast/checkpoint",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"signal_id\":$json.signal_id,\"horizon_minutes\":10,\"min_move_bps\":5,\"timeframe\":\"5m\",\"metadata\":{\"source\":\"n8n_forecast_validate_5m\"}} }}",
+        "options": {}
+      },
+      "id": "Http_Forecast_Checkpoint",
+      "name": "Create Forecast 10m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/forecast/evaluate-due",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"limit\":300,\"max_resolution_lag_minutes\":20,\"persist_events\":true} }}",
+        "options": {}
+      },
+      "id": "Http_Forecast_Evaluate_Due",
+      "name": "Evaluate Due Forecasts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1330, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://strategy_service:8100/forecast/scorecard?lookback_days=7&horizon_minutes=10&timeframe=5m",
+        "options": {}
+      },
+      "id": "Http_Forecast_Scorecard",
+      "name": "Forecast Scorecard 7d",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1610, 300]
+    }
+  ],
+  "connections": {
+    "cron-btc-forecast-5m": {
+      "main": [[{ "node": "Build Features 5m", "type": "main", "index": 0 }]]
+    },
+    "Build Features 5m": {
+      "main": [[{ "node": "Evaluate Signal 5m", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Signal 5m": {
+      "main": [[{ "node": "Create Forecast 10m", "type": "main", "index": 0 }]]
+    },
+    "Create Forecast 10m": {
+      "main": [[{ "node": "Evaluate Due Forecasts", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Due Forecasts": {
+      "main": [[{ "node": "Forecast Scorecard 7d", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true },
+  "active": false
+}

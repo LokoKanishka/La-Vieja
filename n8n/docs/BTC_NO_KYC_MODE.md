@@ -12,6 +12,11 @@ En este modo, la ejecucion pasa por `intents` no-KYC:
 - `POST /execution/intent/confirm` confirma resultado real (filled/rejected/canceled).
 - `POST /execution/intents/reconcile-electrum` revisa `txid` en Electrum y marca `settled` cuando confirma.
 
+Validacion de "adelantarse en el tiempo":
+- `POST /forecast/checkpoint` guarda prediccion con horizonte (ej: +10 minutos).
+- `POST /forecast/evaluate-due` evalua si esa prediccion acerto o fallo al vencimiento.
+- `GET /forecast/scorecard` muestra accuracy y edge real.
+
 ## Comandos
 
 1. Bloquear modo live y limpiar credenciales:
@@ -52,6 +57,16 @@ sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> rejected
 
 ```bash
 bash n8n/scripts/full_test_no_kyc.sh
+```
+
+7. Generar señal + checkpoint ahora (aviso operativo) y revisar score:
+
+```bash
+# alerta inmediata (buy/sell/hold) + checkpoint a 10m
+bash n8n/scripts/forecast_tick_5m.sh 10 5
+
+# score de capacidad predictiva
+sh n8n/scripts/forecast_scorecard.sh 7 10 5m
 ```
 
 ## Garantias del modo

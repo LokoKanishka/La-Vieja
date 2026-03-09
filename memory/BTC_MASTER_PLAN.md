@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 03:11 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 03:58 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -10,9 +10,10 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
 ## 2) Estado Real Verificado (Hecho)
 
 - Infra activa: `n8n_trading`, `btc_postgres`, `btc_strategy_service` arriba y saludables.
-- Workflows BTC activos (8/8):
+- Workflows BTC activos (9/9):
   - BTC Ingest Market 5m
   - BTC Feature Engineering 15m
+  - BTC Forecast Validate 5m
   - BTC Signal Risk Execute 15m
   - BTC Reconcile 1m
   - BTC Custody Sweep Daily
@@ -48,6 +49,12 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - reconciliacion opcional con Electrum `POST /execution/intents/reconcile-electrum`
     - scripts `n8n/scripts/no_kyc_intents_open.sh` y `n8n/scripts/no_kyc_intent_confirm.sh`
     - fix de robustez: serializacion de eventos de riesgo con `json.dumps(..., default=str)` para evitar error UUID no serializable
+  - Validacion real de prediccion a futuro implementada:
+    - tabla `forecast_checks`
+    - endpoints `POST /forecast/checkpoint`, `POST /forecast/evaluate-due`, `GET /forecast/scorecard`
+    - workflow `BTC Forecast Validate 5m` (build features -> signal -> checkpoint +10m -> evaluacion due)
+    - scripts `n8n/scripts/forecast_tick_5m.sh` y `n8n/scripts/forecast_scorecard.sh`
+    - `no_kyc_cycle.sh` extendido para evaluar forecasts vencidos y reportar score
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -152,3 +159,5 @@ En cada sesion nueva:
 - Go/No-Go: `curl -s -X POST http://127.0.0.1:8100/paper/go-no-go -H "Content-Type: application/json" -d '{"lookback_days":14,"persist":true}'`
 - Workflows activos BTC: `docker exec btc_postgres psql -U n8n -d n8n -At -F $'\t' -c "select name, active from workflow_entity where name like 'BTC %' order by name;"`
 - Test completo NO-KYC: `bash n8n/scripts/full_test_no_kyc.sh`
+- Tick de prediccion 5m/10m: `bash n8n/scripts/forecast_tick_5m.sh 10 5`
+- Score de prediccion: `sh n8n/scripts/forecast_scorecard.sh 7 10 5m`
