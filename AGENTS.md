@@ -10,6 +10,7 @@ Al primer mensaje del usuario en una sesion nueva, o si el mensaje es `hola`/`bu
    - Leer `AGENT_MEMORY.md`.
    - Leer ultimas 20 lineas de `memory/index.jsonl` (si existe).
    - Leer la nota del dia en `memory/YYYY/MM/YYYY-MM-DD.md` (si existe).
+   - Leer `memory/BTC_MASTER_PLAN.md` (si existe) como fuente unica del plan BTC.
 2. Verificar estado operativo:
    - `git status --short`
    - `git log --oneline -n 5`
@@ -18,6 +19,7 @@ Al primer mensaje del usuario en una sesion nueva, o si el mensaje es `hola`/`bu
    - Memoria cargada (si/no).
    - Estado de n8n/docker.
    - Pendientes criticos detectados.
+   - Estado del plan maestro BTC (hecho/en curso/pendiente).
 
 ## Regla De Ejecucion
 - No esperar a que el usuario pida "leer memoria": hacerlo directo bajo el protocolo anterior.

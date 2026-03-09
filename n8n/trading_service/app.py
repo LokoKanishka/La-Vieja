@@ -640,14 +640,9 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
             max_drawdown_usd = drawdown
     max_drawdown_pct = (max_drawdown_usd / PAPER_EQUITY_USD) if PAPER_EQUITY_USD > 0 else 1.0
 
-    uptime_window_days = max(0.01, min(float(lookback_days), runtime_days if runtime_days > 0 else float(lookback_days)))
-    expected_heartbeat_count = max(
-        1,
-        int((uptime_window_days * 24 * 60) / max(1, RECONCILE_HEARTBEAT_INTERVAL_MINUTES)),
-    )
     cur.execute(
         """
-        select count(*) as c
+        select min(ts) as first_ok_ts, count(*) as ok_count
         from ops_heartbeat_log
         where component = 'reconcile_loop'
           and status = 'ok'
@@ -655,7 +650,23 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
         """,
         (window_start,),
     )
-    reconcile_heartbeat_ok = int(cur.fetchone()["c"])
+    heartbeat_stats = cur.fetchone()
+    first_reconcile_ok_ts = heartbeat_stats["first_ok_ts"] if heartbeat_stats else None
+    reconcile_heartbeat_ok = int(heartbeat_stats["ok_count"]) if heartbeat_stats else 0
+
+    # Heartbeat logging was introduced after initial trading runtime.
+    # Measure uptime from the first observed heartbeat in the score window to avoid false penalties.
+    if first_reconcile_ok_ts is not None:
+        uptime_start = max(window_start, first_reconcile_ok_ts)
+    else:
+        uptime_start = window_start
+
+    uptime_window_minutes = max(1.0, (utc_now() - uptime_start).total_seconds() / 60.0)
+    uptime_window_days = uptime_window_minutes / (24.0 * 60.0)
+    expected_heartbeat_count = max(
+        1,
+        int(uptime_window_minutes / max(1, RECONCILE_HEARTBEAT_INTERVAL_MINUTES)) + 1,
+    )
     reconcile_uptime_pct = min(100.0, (reconcile_heartbeat_ok / expected_heartbeat_count) * 100.0)
 
     cur.execute(
@@ -691,6 +702,7 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
         "reconcile_heartbeat_ok_count": reconcile_heartbeat_ok,
         "reconcile_heartbeat_expected_count": expected_heartbeat_count,
         "reconcile_uptime_window_days": round(uptime_window_days, 2),
+        "reconcile_uptime_start_ts": uptime_start.isoformat(),
         "reconcile_uptime_pct": round(reconcile_uptime_pct, 2),
         "critical_ops_alerts_24h": critical_ops_alerts_24h,
     }

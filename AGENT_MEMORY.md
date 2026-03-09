@@ -51,6 +51,7 @@
 - Memoria persistente disponible en:
   - `memory/index.jsonl`
   - `memory/YYYY/MM/YYYY-MM-DD.md`
+  - `memory/BTC_MASTER_PLAN.md` (fuente unica del plan total BTC)
 - Scripts clave:
   - `scripts/memory_add.sh`
   - `scripts/memory_recent.sh`
@@ -61,7 +62,7 @@
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`
   3. Revisar webhooks activos: `./n8n/scripts/print_active_webhooks.sh`
-  4. Probar memoria reciente por webhook: `curl "http://127.0.0.1:5111/webhook/memory/recent?days=1"`
+  4. Probar memoria reciente por webhook: `curl "http://127.0.0.1:5111/webhook/MEmRecntWf123456/webhook-memory-recent/memory/recent?days=1"`
   5. Para fase BTC: `cp n8n/.env.trading.example n8n/.env.trading && sh n8n/scripts/trading_up.sh`
 
 ## Protocolo Automatico Al Recibir "hola"
@@ -70,13 +71,15 @@
    - `AGENT_MEMORY.md`
    - ultimas entradas de `memory/index.jsonl`
    - nota del dia en `memory/YYYY/MM/YYYY-MM-DD.md`
+   - `memory/BTC_MASTER_PLAN.md` (si existe)
 2. Auto-actualizar estado operativo:
    - `git status --short`
    - `git log --oneline -n 5`
    - estado de contenedores (`docker ps`)
-3. Reportar resumen de estado y pendientes criticos en 1 mensaje corto.
+3. Reportar resumen de estado y pendientes criticos en 1 mensaje corto, incluyendo estado del plan BTC (hecho/en curso/pendiente).
 4. Si hay cambios pendientes relevantes, ejecutar flujo de cierre:
-   - actualizar memoria (`scripts/memory_add.sh`)
+   - actualizar memoria persistente por n8n webhook (resolver URL real con `./n8n/scripts/print_active_webhooks.sh` y usar la que termine en `memory/add`)
+   - reflejar cambios en `memory/BTC_MASTER_PLAN.md`
    - `git add -A && git commit -m "<resumen>"`
    - `git push origin main`
 5. Mantener este protocolo como comportamiento por defecto para proximas sesiones.
