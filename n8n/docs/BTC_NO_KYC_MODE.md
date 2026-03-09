@@ -1,6 +1,7 @@
 # BTC No-KYC Mode (Paper Only)
 
 Este modo evita entregar datos personales a exchanges centralizados.
+Regla de oro operativa: cero tarjeta y cero costo extra.
 
 ## Objetivo
 
@@ -69,6 +70,12 @@ bash n8n/scripts/forecast_tick_5m.sh 10 5
 sh n8n/scripts/forecast_scorecard.sh 7 10 5m
 ```
 
+8. Verificacion estricta de modo cero pesos:
+
+```bash
+bash n8n/scripts/zero_cost_guard.sh
+```
+
 ## Garantias del modo
 
 - `TRADING_MODE=paper`
@@ -76,6 +83,10 @@ sh n8n/scripts/forecast_scorecard.sh 7 10 5m
 - `EXCHANGE_API_KEY` vacia
 - `EXCHANGE_API_SECRET` vacia
 - `EXCHANGE_API_PASSPHRASE` vacia
+- `OPENAI_API_KEY` vacia
+- `ANTHROPIC_API_KEY` vacia
+- `GOOGLE_API_KEY` vacia
+- `GEMINI_API_KEY` vacia
 
 ## Uso recomendado
 

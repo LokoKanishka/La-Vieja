@@ -48,6 +48,17 @@ cycle_out="$(bash n8n/scripts/no_kyc_cycle.sh 2>&1)" || {
 }
 printf '%s\n' "${cycle_out}"
 
+set +e
+zero_cost_out="$(bash n8n/scripts/zero_cost_guard.sh 2>&1)"
+zero_cost_rc=$?
+set -e
+printf '%s\n' "${zero_cost_out}"
+if [[ "${zero_cost_rc}" -eq 0 ]]; then
+  ok "zero_cost_guard en verde (sin claves pagas)"
+else
+  blocked "zero_cost_guard detecto configuracion con costo (rc=${zero_cost_rc})"
+fi
+
 health_json="$(curl -fsS http://127.0.0.1:8100/health)" || {
   blocked "health endpoint no responde"
   health_json='{}'

@@ -19,6 +19,13 @@ cp n8n/.env.trading.example n8n/.env.trading
 sh n8n/scripts/trading_up.sh
 ```
 
+Modo cero pesos (regla cyberpunk):
+
+```bash
+bash n8n/scripts/no_kyc_lockdown.sh
+bash n8n/scripts/zero_cost_guard.sh
+```
+
 Health checks:
 
 ```bash

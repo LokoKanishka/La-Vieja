@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 03:58 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 04:27 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -55,6 +55,10 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - workflow `BTC Forecast Validate 5m` (build features -> signal -> checkpoint +10m -> evaluacion due)
     - scripts `n8n/scripts/forecast_tick_5m.sh` y `n8n/scripts/forecast_scorecard.sh`
     - `no_kyc_cycle.sh` extendido para evaluar forecasts vencidos y reportar score
+  - Politica "cero pesos" hard-enforced en esta maquina:
+    - `n8n/scripts/no_kyc_lockdown.sh` limpia claves de exchange y de IA paga
+    - `n8n/scripts/zero_cost_guard.sh` bloquea si detecta cualquier API key paga no vacia
+    - `n8n/scripts/full_test_no_kyc.sh` ahora valida `zero_cost_guard` en cada corrida
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -161,3 +165,4 @@ En cada sesion nueva:
 - Test completo NO-KYC: `bash n8n/scripts/full_test_no_kyc.sh`
 - Tick de prediccion 5m/10m: `bash n8n/scripts/forecast_tick_5m.sh 10 5`
 - Score de prediccion: `sh n8n/scripts/forecast_scorecard.sh 7 10 5m`
+- Guard rail cero pesos: `bash n8n/scripts/zero_cost_guard.sh`
