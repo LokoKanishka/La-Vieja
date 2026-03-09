@@ -45,12 +45,20 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
 
 1. Si quant = `hold` -> híbrido = `hold`.
 2. Si quant y AI coinciden y AI supera umbral -> híbrido toma esa acción.
-3. Si no hay acuerdo (o AI débil) -> híbrido = `hold` (modo conservador).
+3. Si no hay acuerdo y `HYBRID_ALLOW_AI_OVERRIDE=true` con AI fuerte -> híbrido puede seguir AI.
+4. Si no hay acuerdo y AI no supera umbral -> `quant_primary` solo si `HYBRID_REQUIRE_AI_AGREEMENT=false` y quant supera umbral.
+5. Si nada anterior aplica -> híbrido = `hold`.
 4. Configurable por variables:
    - `HYBRID_MODE`
    - `HYBRID_REQUIRE_AI_AGREEMENT`
    - `HYBRID_AI_MIN_CONFIDENCE`
    - `HYBRID_QUANT_MIN_CONFIDENCE`
+   - `HYBRID_ALLOW_AI_OVERRIDE`
+   - `HYBRID_FALLBACK_POLICY` (`same_as_quant|inverse_quant|hold_only|adaptive_edge`)
+   - `HYBRID_FALLBACK_LOOKBACK_DAYS`
+   - `HYBRID_FALLBACK_MIN_SAMPLES`
+   - `HYBRID_FALLBACK_EDGE_MARGIN_BPS`
+   - `FORECAST_MAX_ABS_CHANGE_BPS` (excluye outliers extremos en scorecards)
 
 ## Contrato Molbot
 
@@ -63,6 +71,8 @@ El nodo IA espera respuesta JSON con:
 5. `ai_source` (ej. `molbot`)
 
 Si `MOLBOT_WEBHOOK_URL` no está definido, usa `POST /hybrid/ai/fallback`.
+En fallback `adaptive_edge`, la IA local elige entre `same_as_quant` o `inverse_quant`
+según edge histórico reciente (con muestra mínima y exclusión de outliers).
 
 ## Métricas De Paso
 

@@ -73,6 +73,9 @@
 - Ajuste crítico reciente:
   - `POST /signal/evaluate` ahora evita duplicar señales por la misma vela y reutiliza `signal_id`.
   - `n8n/scripts/hybrid_backfill_shadow.sh` ahora selecciona señales únicas por vela para score híbrido más limpio.
+  - `docker-compose.trading.yml` ahora inyecta variables `forecast/hybrid` completas al `strategy_service`.
+  - `POST /hybrid/ai/fallback` soporta `HYBRID_FALLBACK_POLICY=adaptive_edge` (selección por edge reciente).
+  - Scorecards `forecast/hybrid` excluyen outliers con `FORECAST_MAX_ABS_CHANGE_BPS`.
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

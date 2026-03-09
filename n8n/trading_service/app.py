@@ -50,10 +50,17 @@ FORECAST_DEFAULT_HORIZON_MINUTES = int(os.getenv("FORECAST_DEFAULT_HORIZON_MINUT
 FORECAST_MIN_MOVE_BPS = float(os.getenv("FORECAST_MIN_MOVE_BPS", "5"))
 FORECAST_MAX_RESOLUTION_LAG_MINUTES = int(os.getenv("FORECAST_MAX_RESOLUTION_LAG_MINUTES", "20"))
 FORECAST_GO_MIN_ACCURACY = float(os.getenv("FORECAST_GO_MIN_ACCURACY", "0.55"))
+FORECAST_MAX_ABS_CHANGE_BPS = float(os.getenv("FORECAST_MAX_ABS_CHANGE_BPS", "1000"))
 HYBRID_MODE = os.getenv("HYBRID_MODE", "shadow").lower()
 HYBRID_REQUIRE_AI_AGREEMENT = os.getenv("HYBRID_REQUIRE_AI_AGREEMENT", "true").lower() == "true"
 HYBRID_AI_MIN_CONFIDENCE = float(os.getenv("HYBRID_AI_MIN_CONFIDENCE", "0.60"))
 HYBRID_QUANT_MIN_CONFIDENCE = float(os.getenv("HYBRID_QUANT_MIN_CONFIDENCE", "0.10"))
+HYBRID_ALLOW_AI_OVERRIDE = os.getenv("HYBRID_ALLOW_AI_OVERRIDE", "false").lower() == "true"
+HYBRID_FALLBACK_POLICY = os.getenv("HYBRID_FALLBACK_POLICY", "same_as_quant").strip().lower()
+HYBRID_FALLBACK_MIN_CONFIDENCE = float(os.getenv("HYBRID_FALLBACK_MIN_CONFIDENCE", "0.60"))
+HYBRID_FALLBACK_LOOKBACK_DAYS = int(os.getenv("HYBRID_FALLBACK_LOOKBACK_DAYS", "7"))
+HYBRID_FALLBACK_MIN_SAMPLES = int(os.getenv("HYBRID_FALLBACK_MIN_SAMPLES", "30"))
+HYBRID_FALLBACK_EDGE_MARGIN_BPS = float(os.getenv("HYBRID_FALLBACK_EDGE_MARGIN_BPS", "0"))
 HYBRID_ALERT_MIN_RESOLVED = int(os.getenv("HYBRID_ALERT_MIN_RESOLVED", "20"))
 HYBRID_ALERT_MIN_ACCURACY = float(os.getenv("HYBRID_ALERT_MIN_ACCURACY", "0.55"))
 HYBRID_ALERT_MIN_EDGE_BPS = float(os.getenv("HYBRID_ALERT_MIN_EDGE_BPS", "0"))
@@ -1179,6 +1186,7 @@ def build_forecast_scorecard(
     total = len(rows)
     pending = 0
     expired = 0
+    outlier_excluded = 0
     resolved = 0
     hits = 0
     misses = 0
@@ -1200,8 +1208,12 @@ def build_forecast_scorecard(
             expired += 1
             continue
 
-        resolved += 1
         change_bps = float(row["price_change_bps"] or 0.0)
+        if abs(change_bps) > FORECAST_MAX_ABS_CHANGE_BPS:
+            outlier_excluded += 1
+            continue
+
+        resolved += 1
         action_changes.setdefault(action, []).append(change_bps)
         if action in action_stats:
             action_stats[action]["resolved"] += 1
@@ -1237,6 +1249,7 @@ def build_forecast_scorecard(
         "resolved_forecasts": resolved,
         "pending_forecasts": pending,
         "expired_forecasts": expired,
+        "outlier_excluded": outlier_excluded,
         "hits": hits,
         "misses": misses,
         "accuracy": None if accuracy is None else round(accuracy, 4),
@@ -1261,18 +1274,39 @@ def normalize_hybrid_mode(mode: str | None) -> str:
     raise HTTPException(status_code=400, detail="mode debe ser shadow|paper|live")
 
 
+def normalize_hybrid_fallback_policy(policy: str | None) -> str:
+    normalized = (policy or "").strip().lower()
+    if normalized in {"same_as_quant", "inverse_quant", "hold_only", "adaptive_edge"}:
+        return normalized
+    return "same_as_quant"
+
+
+def inverse_action(action: str) -> str:
+    if action == "buy":
+        return "sell"
+    if action == "sell":
+        return "buy"
+    return "hold"
+
+
 def resolve_hybrid_action(
     quant_action: str,
     quant_confidence: float,
     ai_action: str,
     ai_confidence: float,
 ) -> tuple[str, float, bool, str]:
-    if quant_action == "hold":
-        return "hold", max(0.0, quant_confidence), ai_action == quant_action, "quant_hold"
-
     agreement = ai_action == quant_action
+
+    if quant_action == "hold":
+        if HYBRID_ALLOW_AI_OVERRIDE and ai_action in {"buy", "sell"} and ai_confidence >= HYBRID_AI_MIN_CONFIDENCE:
+            return ai_action, min(0.99, max(0.05, ai_confidence)), agreement, "ai_override_quant_hold"
+        return "hold", max(0.0, quant_confidence), agreement, "quant_hold"
+
     if agreement and ai_confidence >= HYBRID_AI_MIN_CONFIDENCE:
         return quant_action, min(0.99, max(quant_confidence, ai_confidence)), True, "quant_ai_agree"
+
+    if HYBRID_ALLOW_AI_OVERRIDE and ai_action in {"buy", "sell"} and ai_confidence >= HYBRID_AI_MIN_CONFIDENCE:
+        return ai_action, min(0.99, max(0.05, ai_confidence)), agreement, "ai_override_disagreement"
 
     if not HYBRID_REQUIRE_AI_AGREEMENT and quant_confidence >= HYBRID_QUANT_MIN_CONFIDENCE:
         return quant_action, min(0.99, max(0.05, quant_confidence)), agreement, "quant_primary_without_ai_agreement"
@@ -1294,16 +1328,23 @@ def build_hybrid_scorecard(
                d.quant_confidence, d.ai_confidence, d.hybrid_confidence,
                d.agreement, d.decision_reason,
                f.price_change_bps, f.min_move_bps, f.outcome as forecast_outcome
-        from hybrid_decisions d
+        from (
+          select distinct on (symbol, signal_ts)
+                 decision_id, signal_id, quant_action, ai_action, hybrid_action,
+                 quant_confidence, ai_confidence, hybrid_confidence,
+                 agreement, decision_reason, symbol, signal_ts, created_at, updated_at
+          from hybrid_decisions
+          where created_at >= %s
+            and mode = %s
+          order by symbol, signal_ts, updated_at desc, created_at desc
+        ) d
         left join forecast_checks f
           on f.signal_id = d.signal_id
          and (%s::int is null or f.horizon_minutes = %s)
          and (%s::text is null or f.timeframe = %s)
-        where d.created_at >= %s
-          and d.mode = %s
-        order by d.created_at desc
+        order by d.updated_at desc, d.created_at desc
         """,
-        (horizon_minutes, horizon_minutes, timeframe, timeframe, window_start, mode),
+        (window_start, mode, horizon_minutes, horizon_minutes, timeframe, timeframe),
     )
     rows = cur.fetchall()
 
@@ -1311,6 +1352,7 @@ def build_hybrid_scorecard(
     agreement_count = 0
     tradable = 0
     with_outcome = 0
+    outlier_excluded = 0
 
     quant_hits = 0
     quant_misses = 0
@@ -1336,8 +1378,12 @@ def build_hybrid_scorecard(
         if row["forecast_outcome"] not in {"hit", "miss"} or row["price_change_bps"] is None:
             continue
 
-        with_outcome += 1
         change_bps = float(row["price_change_bps"])
+        if abs(change_bps) > FORECAST_MAX_ABS_CHANGE_BPS:
+            outlier_excluded += 1
+            continue
+
+        with_outcome += 1
         min_move_bps = float(row["min_move_bps"] or FORECAST_MIN_MOVE_BPS)
 
         quant_action = str(row["quant_action"])
@@ -1387,6 +1433,7 @@ def build_hybrid_scorecard(
         "agreement_count": agreement_count,
         "agreement_rate": round((agreement_count / total), 4) if total > 0 else None,
         "decisions_with_outcome": with_outcome,
+        "outlier_excluded": outlier_excluded,
         "reason_counts": reason_counts,
         "quant": metric_block(quant_hits, quant_misses, quant_edges),
         "ai": metric_block(ai_hits, ai_misses, ai_edges),
@@ -2194,6 +2241,8 @@ def hybrid_decision(req: HybridDecisionRequest) -> dict[str, Any]:
             "require_ai_agreement": HYBRID_REQUIRE_AI_AGREEMENT,
             "ai_min_confidence": HYBRID_AI_MIN_CONFIDENCE,
             "quant_min_confidence": HYBRID_QUANT_MIN_CONFIDENCE,
+            "allow_ai_override": HYBRID_ALLOW_AI_OVERRIDE,
+            "fallback_policy": HYBRID_FALLBACK_POLICY,
         }
 
         if req.attach_forecast:
@@ -2407,12 +2456,95 @@ def hybrid_scorecard(
 def hybrid_ai_fallback(req: HybridAiFallbackRequest) -> dict[str, Any]:
     quant_action = normalize_trade_action(req.quant_action)
     quant_confidence = max(0.0, min(0.99, float(req.quant_confidence)))
+    policy = normalize_hybrid_fallback_policy(HYBRID_FALLBACK_POLICY)
+
     ai_action = quant_action
-    ai_confidence = max(0.55, quant_confidence)
-    ai_reason = "fallback_rule_same_as_quant"
-    if quant_action == "hold":
-        ai_confidence = max(0.55, quant_confidence)
-        ai_reason = "fallback_hold_no_external_ai"
+    ai_reason = f"fallback_policy_{policy}"
+    if policy == "hold_only":
+        ai_action = "hold"
+    elif policy == "inverse_quant" and quant_action in {"buy", "sell"}:
+        ai_action = inverse_action(quant_action)
+    elif policy == "adaptive_edge":
+        if quant_action in {"buy", "sell"}:
+            window_start = utc_now() - timedelta(days=max(1, HYBRID_FALLBACK_LOOKBACK_DAYS))
+            samples = 0
+            quant_edge = None
+            inverse_edge = None
+            try:
+                with get_conn() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        with latest_signal_per_candle as (
+                          select distinct on (s.symbol, s.ts, s.strategy_version)
+                                 s.action as quant_action,
+                                 f.price_change_bps::float8 as change_bps
+                          from signals s
+                          join forecast_checks f
+                            on f.signal_id = s.signal_id
+                          where s.symbol = %s
+                            and f.created_at >= %s
+                            and f.timeframe = %s
+                            and f.horizon_minutes = %s
+                            and f.outcome in ('hit', 'miss')
+                            and f.price_change_bps is not null
+                            and abs(f.price_change_bps::float8) <= %s
+                          order by s.symbol, s.ts, s.strategy_version, s.created_at desc, s.signal_id desc
+                        )
+                        select count(*) as samples,
+                               avg(case
+                                     when quant_action = 'buy' then change_bps
+                                     when quant_action = 'sell' then -change_bps
+                                     else -abs(change_bps)
+                                   end) as quant_edge,
+                               avg(case
+                                     when quant_action = 'buy' then -change_bps
+                                     when quant_action = 'sell' then change_bps
+                                     else -abs(change_bps)
+                                   end) as inverse_edge
+                        from latest_signal_per_candle
+                        """,
+                        (
+                            req.symbol,
+                            window_start,
+                            MONITORED_TIMEFRAME,
+                            FORECAST_DEFAULT_HORIZON_MINUTES,
+                            FORECAST_MAX_ABS_CHANGE_BPS,
+                        ),
+                    )
+                    stats = cur.fetchone()
+                samples = int(stats["samples"] or 0) if stats else 0
+                quant_edge = float(stats["quant_edge"]) if stats and stats["quant_edge"] is not None else None
+                inverse_edge = float(stats["inverse_edge"]) if stats and stats["inverse_edge"] is not None else None
+            except Exception:
+                samples = 0
+                quant_edge = None
+                inverse_edge = None
+
+            if (
+                samples >= HYBRID_FALLBACK_MIN_SAMPLES
+                and quant_edge is not None
+                and inverse_edge is not None
+                and inverse_edge > (quant_edge + HYBRID_FALLBACK_EDGE_MARGIN_BPS)
+            ):
+                ai_action = inverse_action(quant_action)
+                ai_reason = (
+                    f"fallback_policy_adaptive_edge:choice=inverse_quant,samples={samples},"
+                    f"quant_edge={round(quant_edge,4)},inverse_edge={round(inverse_edge,4)}"
+                )
+            else:
+                ai_action = quant_action
+                ai_reason = (
+                    f"fallback_policy_adaptive_edge:choice=same_as_quant,samples={samples},"
+                    f"quant_edge={None if quant_edge is None else round(quant_edge,4)},"
+                    f"inverse_edge={None if inverse_edge is None else round(inverse_edge,4)}"
+                )
+        else:
+            ai_action = "hold"
+            ai_reason = "fallback_policy_adaptive_edge_quant_hold"
+
+    ai_confidence = min(0.99, max(HYBRID_FALLBACK_MIN_CONFIDENCE, quant_confidence))
+    if ai_action == "hold":
+        ai_confidence = min(0.99, max(0.55, HYBRID_FALLBACK_MIN_CONFIDENCE, quant_confidence))
 
     return {
         "ok": True,

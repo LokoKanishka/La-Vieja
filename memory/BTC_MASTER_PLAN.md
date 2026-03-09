@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 05:13 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 05:31 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -79,6 +79,18 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
   - Verificación operativa de esta sesión:
     - `git push origin main`: remoto al día.
     - `bash n8n/scripts/full_test_no_kyc.sh`: `failed=0 warn=1` (warn esperado por bloqueo pre-live en modo NO-KYC).
+  - Fase híbrida ajustada y validada (esta tanda):
+    - `docker-compose.trading.yml` ahora pasa al contenedor todas las variables forecast/hybrid (antes faltaban varias y se usaban defaults).
+    - `POST /hybrid/ai/fallback` expandido con política `adaptive_edge` (elige `same_as_quant` o `inverse_quant` por edge histórico reciente).
+    - `resolve_hybrid_action` permite `AI override` configurable (`HYBRID_ALLOW_AI_OVERRIDE=true`).
+    - Scorecards `forecast/hybrid` ahora excluyen outliers extremos vía `FORECAST_MAX_ABS_CHANGE_BPS` (actual: 1000 bps).
+    - `n8n/scripts/hybrid_backfill_shadow.sh` ahora usa fallback real por señal (ya no inyecta `pending_molbot` vacío).
+    - `n8n/scripts/no_kyc_lockdown.sh` deja modo híbrido consistente para NO-KYC: `adaptive_edge` + override + umbrales explícitos.
+    - Estado post-ajuste:
+      - `hybrid.accuracy=0.2708`
+      - `hybrid.avg_edge_bps=-3.9721`
+      - `outlier_excluded=5`
+      - `decisions_with_outcome=48` (meta mínima de muestra casi alcanzada)
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -162,7 +174,7 @@ Orden de ejecucion inmediato:
 2. Ejecutar `n8n/scripts/zero_cost_guard.sh` y mantenerlo en verde.
 3. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
 4. Monitorear cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`.
-5. Ajustar regla híbrida para subir `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
+5. Seguir validando `adaptive_edge` en muestra forward para llevar `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
 6. Persistir estado y cambios en memoria n8n + git.
 
 Bloqueos de pre-live (irrelevantes mientras NO-KYC siga activo):
