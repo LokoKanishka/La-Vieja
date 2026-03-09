@@ -42,6 +42,8 @@ Workflows incluidos:
 - `BTC Signal Risk Execute 15m`
 - `BTC Reconcile 1m`
 - `BTC Custody Sweep Daily`
+- `BTC Ops Monitor 1m`
+- `BTC Paper Go No-Go Daily`
 
 ## 3) Proceso automático
 
@@ -60,6 +62,12 @@ Workflows incluidos:
 - `POST /features/build`
 - `POST /signal/evaluate`
 - `POST /risk/check`
+- `GET /risk/controls`
+- `POST /risk/kill-switch`
+- `GET /ops/summary`
+- `POST /alerts/evaluate`
+- `GET /paper/scorecard`
+- `POST /paper/go-no-go`
 - `POST /execution/order`
 - `POST /reconcile`
 - `POST /custody/sweep`
@@ -95,6 +103,41 @@ Variables para live con ccxt:
 - `EXCHANGE_API_PASSPHRASE=...` (si aplica)
 - `EXCHANGE_SYMBOL=BTC/USD`
 - `EXCHANGE_SANDBOX=true|false`
+
+Variables de control de riesgo:
+
+- `DAILY_LOSS_LIMIT_USD=300` (límite duro diario)
+- `GLOBAL_KILL_SWITCH_DEFAULT=false` (arranque del kill switch)
+- `MONITORED_SYMBOL=BTCUSD` y `MONITORED_TIMEFRAME=5m`
+- `MARKET_DATA_STALE_MINUTES=15`
+- `FEATURES_DATA_STALE_MINUTES=30`
+- `RECONCILE_STALE_MINUTES=3`
+- `REJECTED_ORDERS_1H_WARN_THRESHOLD=3`
+- `ALERT_COOLDOWN_MINUTES=30`
+- `RECONCILE_HEARTBEAT_INTERVAL_MINUTES=1`
+- `PAPER_GO_NO_GO_LOOKBACK_DAYS=14`
+- `GO_NO_GO_MIN_DAYS=14`
+- `GO_NO_GO_MIN_EXECUTED_ORDERS=20`
+- `GO_NO_GO_MIN_WIN_RATE=0.45`
+- `GO_NO_GO_MAX_DRAWDOWN_PCT=0.08`
+- `GO_NO_GO_MIN_REALIZED_PNL_USD=0`
+- `GO_NO_GO_MAX_REJECTION_RATE=0.30`
+- `GO_NO_GO_MIN_RECONCILE_UPTIME_PCT=95`
+- `GO_NO_GO_MAX_CRITICAL_ALERTS_24H=0`
+
+Kill switch y pérdida diaria:
+
+- Si `daily_loss_usd >= DAILY_LOSS_LIMIT_USD`, el servicio activa `global_kill_switch` automáticamente y bloquea nuevas órdenes.
+- El estado se consulta en `GET /risk/controls` y también aparece en `GET /health`.
+- Activación/desactivación manual: `POST /risk/kill-switch` con `{ "enabled": true|false, "reason": "...", "metadata": {} }`.
+- `GET /ops/summary` expone staleness de datos, heartbeat de reconcile, rechazos por hora y eventos de riesgo recientes.
+- `POST /alerts/evaluate` calcula alertas (`warning/critical`) y con `persist=true` las registra en `risk_events` con cooldown.
+
+Go / No-Go (paper):
+
+- `GET /paper/scorecard` calcula métricas del período (P&L realizado, drawdown, win rate, rechazo y uptime reconcile).
+- `POST /paper/go-no-go` evalúa umbrales de paso a `live` y puede persistir historial en `paper_evaluations`.
+- El workflow `BTC Paper Go No-Go Daily` ejecuta esta evaluación diariamente y guarda decisión `go|no_go`.
 
 Antes de operar en `live`:
 

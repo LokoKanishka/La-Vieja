@@ -1,0 +1,46 @@
+{
+  "name": "BTC Paper Go No-Go Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 9
+            }
+          ]
+        }
+      },
+      "id": "Cron_BTC_Paper_Go_No_Go_Daily",
+      "name": "cron-btc-paper-go-no-go-daily",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [280, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://strategy_service:8100/paper/go-no-go",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"persist\":true,\"include_scorecard\":true} }}",
+        "options": {}
+      },
+      "id": "Http_Paper_Go_No_Go",
+      "name": "Evaluate Paper Go No-Go",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300]
+    }
+  ],
+  "connections": {
+    "cron-btc-paper-go-no-go-daily": {
+      "main": [[{ "node": "Evaluate Paper Go No-Go", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "meta": { "templateCredsSetupCompleted": true },
+  "active": false
+}

@@ -2,7 +2,7 @@ import base64
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import pstdev
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -28,6 +28,24 @@ MAX_ORDERS_PER_HOUR = int(os.getenv("MAX_ORDERS_PER_HOUR", "12"))
 DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "300"))
 TAKER_FEE_BPS = float(os.getenv("TAKER_FEE_BPS", "10"))
 VOLATILITY_CUTOFF = float(os.getenv("VOLATILITY_CUTOFF", "0.08"))
+GLOBAL_KILL_SWITCH_DEFAULT = os.getenv("GLOBAL_KILL_SWITCH_DEFAULT", "false").lower() == "true"
+MONITORED_SYMBOL = os.getenv("MONITORED_SYMBOL", "BTCUSD")
+MONITORED_TIMEFRAME = os.getenv("MONITORED_TIMEFRAME", "5m")
+MARKET_DATA_STALE_MINUTES = int(os.getenv("MARKET_DATA_STALE_MINUTES", "15"))
+FEATURES_DATA_STALE_MINUTES = int(os.getenv("FEATURES_DATA_STALE_MINUTES", "30"))
+RECONCILE_STALE_MINUTES = int(os.getenv("RECONCILE_STALE_MINUTES", "3"))
+REJECTED_ORDERS_1H_WARN_THRESHOLD = int(os.getenv("REJECTED_ORDERS_1H_WARN_THRESHOLD", "3"))
+ALERT_COOLDOWN_MINUTES = int(os.getenv("ALERT_COOLDOWN_MINUTES", "30"))
+RECONCILE_HEARTBEAT_INTERVAL_MINUTES = int(os.getenv("RECONCILE_HEARTBEAT_INTERVAL_MINUTES", "1"))
+PAPER_GO_NO_GO_LOOKBACK_DAYS = int(os.getenv("PAPER_GO_NO_GO_LOOKBACK_DAYS", "14"))
+GO_NO_GO_MIN_DAYS = int(os.getenv("GO_NO_GO_MIN_DAYS", "14"))
+GO_NO_GO_MIN_EXECUTED_ORDERS = int(os.getenv("GO_NO_GO_MIN_EXECUTED_ORDERS", "20"))
+GO_NO_GO_MIN_WIN_RATE = float(os.getenv("GO_NO_GO_MIN_WIN_RATE", "0.45"))
+GO_NO_GO_MAX_DRAWDOWN_PCT = float(os.getenv("GO_NO_GO_MAX_DRAWDOWN_PCT", "0.08"))
+GO_NO_GO_MIN_REALIZED_PNL_USD = float(os.getenv("GO_NO_GO_MIN_REALIZED_PNL_USD", "0"))
+GO_NO_GO_MAX_REJECTION_RATE = float(os.getenv("GO_NO_GO_MAX_REJECTION_RATE", "0.30"))
+GO_NO_GO_MIN_RECONCILE_UPTIME_PCT = float(os.getenv("GO_NO_GO_MIN_RECONCILE_UPTIME_PCT", "95"))
+GO_NO_GO_MAX_CRITICAL_ALERTS_24H = int(os.getenv("GO_NO_GO_MAX_CRITICAL_ALERTS_24H", "0"))
 
 EXCHANGE_ADAPTER = os.getenv("EXCHANGE_ADAPTER", "paper").lower()
 EXCHANGE_ID = os.getenv("EXCHANGE_ID", "kraken")
@@ -100,12 +118,671 @@ class ElectrumRpcRequest(BaseModel):
     params: list[Any] = Field(default_factory=list)
 
 
+class KillSwitchSetRequest(BaseModel):
+    enabled: bool
+    reason: str = "manual_override"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlertEvaluateRequest(BaseModel):
+    persist: bool = True
+    include_snapshot: bool = True
+
+
+class PaperGoNoGoRequest(BaseModel):
+    lookback_days: int = PAPER_GO_NO_GO_LOOKBACK_DAYS
+    persist: bool = True
+    include_scorecard: bool = True
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def get_conn() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+def bootstrap_runtime_schema() -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            alter table fills
+            add column if not exists realized_pnl_usd numeric not null default 0
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists risk_controls (
+              control_key text primary key,
+              enabled boolean not null default false,
+              reason text not null default '',
+              metadata jsonb not null default '{}'::jsonb,
+              updated_at timestamptz not null default now()
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists ops_heartbeats (
+              component text primary key,
+              last_seen_at timestamptz not null,
+              status text not null,
+              payload jsonb not null default '{}'::jsonb,
+              updated_at timestamptz not null default now()
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists ops_alert_state (
+              alert_key text primary key,
+              last_level text not null,
+              last_message text not null,
+              last_payload jsonb not null default '{}'::jsonb,
+              last_fired_at timestamptz not null,
+              updated_at timestamptz not null default now()
+            )
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists ops_heartbeat_log (
+              id uuid primary key,
+              component text not null,
+              ts timestamptz not null default now(),
+              status text not null,
+              payload jsonb not null default '{}'::jsonb
+            )
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists idx_ops_heartbeat_log_component_ts
+            on ops_heartbeat_log(component, ts desc)
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists paper_evaluations (
+              evaluation_id uuid primary key,
+              ts timestamptz not null default now(),
+              lookback_days int not null,
+              decision text not null check (decision in ('go', 'no_go')),
+              scorecard jsonb not null,
+              criteria jsonb not null
+            )
+            """
+        )
+        cur.execute(
+            """
+            insert into risk_controls(control_key, enabled, reason, metadata)
+            values('global_kill_switch', %s, %s, %s::jsonb)
+            on conflict(control_key) do nothing
+            """,
+            (GLOBAL_KILL_SWITCH_DEFAULT, "startup_default", json.dumps({"source": "startup"})),
+        )
+        conn.commit()
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    try:
+        bootstrap_runtime_schema()
+    except Exception as exc:
+        print(f"warning: bootstrap_runtime_schema failed: {exc}")
+
+
+def set_kill_switch_state(
+    cur: psycopg.Cursor,
+    enabled: bool,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    cur.execute(
+        """
+        insert into risk_controls(control_key, enabled, reason, metadata, updated_at)
+        values('global_kill_switch', %s, %s, %s::jsonb, now())
+        on conflict(control_key) do update
+            set enabled = excluded.enabled,
+                reason = excluded.reason,
+                metadata = excluded.metadata,
+                updated_at = now()
+        """,
+        (enabled, reason, json.dumps(metadata or {})),
+    )
+
+
+def get_kill_switch_state(cur: psycopg.Cursor) -> dict[str, Any]:
+    cur.execute(
+        """
+        select enabled, reason, metadata, updated_at
+        from risk_controls
+        where control_key = 'global_kill_switch'
+        limit 1
+        """
+    )
+    row = cur.fetchone()
+    if row:
+        return {
+            "enabled": bool(row["enabled"]),
+            "reason": row["reason"],
+            "metadata": row["metadata"],
+            "updated_at": row["updated_at"],
+        }
+
+    set_kill_switch_state(cur, GLOBAL_KILL_SWITCH_DEFAULT, "lazy_default", {"source": "lazy_init"})
+    return {
+        "enabled": GLOBAL_KILL_SWITCH_DEFAULT,
+        "reason": "lazy_default",
+        "metadata": {"source": "lazy_init"},
+        "updated_at": utc_now(),
+    }
+
+
+def get_daily_realized_pnl(cur: psycopg.Cursor) -> float:
+    cur.execute(
+        """
+        select coalesce(sum(realized_pnl_usd), 0) as pnl
+        from fills
+        where ts::date = current_date
+        """
+    )
+    row = cur.fetchone()
+    return float(row["pnl"])
+
+
+def minutes_since(ts: datetime | None) -> float | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (utc_now() - ts.astimezone(timezone.utc)).total_seconds() / 60.0)
+
+
+def upsert_heartbeat(cur: psycopg.Cursor, component: str, status: str, payload: dict[str, Any]) -> None:
+    cur.execute(
+        """
+        insert into ops_heartbeats(component, last_seen_at, status, payload, updated_at)
+        values(%s, now(), %s, %s::jsonb, now())
+        on conflict(component) do update
+            set last_seen_at = excluded.last_seen_at,
+                status = excluded.status,
+                payload = excluded.payload,
+                updated_at = now()
+        """,
+        (component, status, json.dumps(payload)),
+    )
+
+
+def get_ops_snapshot(cur: psycopg.Cursor) -> dict[str, Any]:
+    kill_switch = get_kill_switch_state(cur)
+    daily_realized_pnl = get_daily_realized_pnl(cur)
+    daily_loss_usd = max(0.0, -daily_realized_pnl)
+
+    cur.execute(
+        """
+        select max(ts) as latest_ts
+        from market_candles
+        where symbol = %s and timeframe = %s
+        """,
+        (MONITORED_SYMBOL, MONITORED_TIMEFRAME),
+    )
+    market_row = cur.fetchone()
+    latest_market_ts = market_row["latest_ts"] if market_row else None
+    market_age_minutes = minutes_since(latest_market_ts)
+
+    cur.execute(
+        """
+        select max(ts) as latest_ts
+        from features
+        where symbol = %s and feature_set_version = %s
+        """,
+        (MONITORED_SYMBOL, FEATURE_SET_VERSION),
+    )
+    feature_row = cur.fetchone()
+    latest_feature_ts = feature_row["latest_ts"] if feature_row else None
+    feature_age_minutes = minutes_since(latest_feature_ts)
+
+    cur.execute(
+        """
+        select last_seen_at, status, payload
+        from ops_heartbeats
+        where component = 'reconcile_loop'
+        limit 1
+        """
+    )
+    reconcile_row = cur.fetchone()
+    reconcile_last_seen = reconcile_row["last_seen_at"] if reconcile_row else None
+    reconcile_age_minutes = minutes_since(reconcile_last_seen)
+    reconcile_status = reconcile_row["status"] if reconcile_row else "missing"
+
+    cur.execute(
+        """
+        select count(*) as c
+        from orders
+        where created_at >= now() - interval '1 hour'
+          and status = 'rejected'
+        """
+    )
+    rejected_orders_1h = int(cur.fetchone()["c"])
+
+    cur.execute(
+        """
+        select severity, count(*) as c
+        from risk_events
+        where ts >= now() - interval '1 hour'
+        group by severity
+        """
+    )
+    risk_event_counts = {str(row["severity"]): int(row["c"]) for row in cur.fetchall()}
+
+    return {
+        "monitored_symbol": MONITORED_SYMBOL,
+        "monitored_timeframe": MONITORED_TIMEFRAME,
+        "kill_switch_enabled": bool(kill_switch["enabled"]),
+        "kill_switch_reason": kill_switch["reason"],
+        "daily_realized_pnl_usd": round(daily_realized_pnl, 4),
+        "daily_loss_usd": round(daily_loss_usd, 4),
+        "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+        "market_data_age_minutes": None if market_age_minutes is None else round(market_age_minutes, 2),
+        "feature_data_age_minutes": None if feature_age_minutes is None else round(feature_age_minutes, 2),
+        "reconcile_age_minutes": None if reconcile_age_minutes is None else round(reconcile_age_minutes, 2),
+        "reconcile_status": reconcile_status,
+        "rejected_orders_1h": rejected_orders_1h,
+        "risk_events_1h": risk_event_counts,
+        "latest_market_ts": latest_market_ts,
+        "latest_feature_ts": latest_feature_ts,
+        "reconcile_last_seen_at": reconcile_last_seen,
+    }
+
+
+def build_ops_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+
+    market_age = snapshot["market_data_age_minutes"]
+    if market_age is None:
+        alerts.append(
+            {
+                "key": "market_data_missing",
+                "level": "critical",
+                "message": "No hay velas de mercado para el simbolo monitoreado",
+                "context": {"symbol": snapshot["monitored_symbol"], "timeframe": snapshot["monitored_timeframe"]},
+            }
+        )
+    elif float(market_age) > MARKET_DATA_STALE_MINUTES:
+        level = "critical" if float(market_age) > (MARKET_DATA_STALE_MINUTES * 2) else "warning"
+        alerts.append(
+            {
+                "key": "market_data_stale",
+                "level": level,
+                "message": f"Market data stale: {market_age}m",
+                "context": {"age_minutes": market_age, "threshold_minutes": MARKET_DATA_STALE_MINUTES},
+            }
+        )
+
+    feature_age = snapshot["feature_data_age_minutes"]
+    if feature_age is None:
+        alerts.append(
+            {
+                "key": "features_missing",
+                "level": "warning",
+                "message": "No hay features recientes para el simbolo monitoreado",
+                "context": {"symbol": snapshot["monitored_symbol"], "feature_set_version": FEATURE_SET_VERSION},
+            }
+        )
+    elif float(feature_age) > FEATURES_DATA_STALE_MINUTES:
+        alerts.append(
+            {
+                "key": "features_stale",
+                "level": "warning",
+                "message": f"Feature data stale: {feature_age}m",
+                "context": {"age_minutes": feature_age, "threshold_minutes": FEATURES_DATA_STALE_MINUTES},
+            }
+        )
+
+    reconcile_age = snapshot["reconcile_age_minutes"]
+    if reconcile_age is None:
+        alerts.append(
+            {
+                "key": "reconcile_missing",
+                "level": "critical",
+                "message": "No existe heartbeat del reconcile loop",
+                "context": {"component": "reconcile_loop"},
+            }
+        )
+    elif float(reconcile_age) > RECONCILE_STALE_MINUTES:
+        alerts.append(
+            {
+                "key": "reconcile_stale",
+                "level": "critical",
+                "message": f"Reconcile stale: {reconcile_age}m",
+                "context": {"age_minutes": reconcile_age, "threshold_minutes": RECONCILE_STALE_MINUTES},
+            }
+        )
+
+    if snapshot["kill_switch_enabled"]:
+        alerts.append(
+            {
+                "key": "kill_switch_enabled",
+                "level": "critical",
+                "message": "Kill switch global activado",
+                "context": {"reason": snapshot["kill_switch_reason"]},
+            }
+        )
+
+    if float(snapshot["daily_loss_usd"]) >= DAILY_LOSS_LIMIT_USD:
+        alerts.append(
+            {
+                "key": "daily_loss_limit_exceeded",
+                "level": "critical",
+                "message": "Perdida diaria supero limite configurado",
+                "context": {
+                    "daily_loss_usd": snapshot["daily_loss_usd"],
+                    "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+                },
+            }
+        )
+
+    if int(snapshot["rejected_orders_1h"]) >= REJECTED_ORDERS_1H_WARN_THRESHOLD:
+        alerts.append(
+            {
+                "key": "high_rejected_orders_1h",
+                "level": "warning",
+                "message": f"Rechazos altos en 1h: {snapshot['rejected_orders_1h']}",
+                "context": {
+                    "rejected_orders_1h": snapshot["rejected_orders_1h"],
+                    "threshold": REJECTED_ORDERS_1H_WARN_THRESHOLD,
+                },
+            }
+        )
+
+    return alerts
+
+
+def persist_ops_alerts(cur: psycopg.Cursor, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    persisted: list[dict[str, Any]] = []
+    for alert in alerts:
+        alert_key = str(alert["key"])
+        level = str(alert["level"])
+        message = str(alert["message"])
+        context = dict(alert.get("context") or {})
+
+        cur.execute(
+            """
+            select last_fired_at, last_level, last_message
+            from ops_alert_state
+            where alert_key = %s
+            """,
+            (alert_key,),
+        )
+        row = cur.fetchone()
+        should_fire = True
+        if row:
+            elapsed = minutes_since(row["last_fired_at"])
+            same_signature = row["last_level"] == level and row["last_message"] == message
+            if elapsed is not None and elapsed < ALERT_COOLDOWN_MINUTES and same_signature:
+                should_fire = False
+
+        if should_fire:
+            insert_risk_event(
+                cur,
+                rule=f"ops_alert_{alert_key}",
+                severity=level,
+                context={"message": message, "context": context},
+            )
+            persisted.append(alert)
+            cur.execute(
+                """
+                insert into ops_alert_state(alert_key, last_level, last_message, last_payload, last_fired_at, updated_at)
+                values(%s, %s, %s, %s::jsonb, now(), now())
+                on conflict(alert_key) do update
+                    set last_level = excluded.last_level,
+                        last_message = excluded.last_message,
+                        last_payload = excluded.last_payload,
+                        last_fired_at = excluded.last_fired_at,
+                        updated_at = now()
+                """,
+                (alert_key, level, message, json.dumps(context)),
+            )
+
+    return persisted
+
+
+def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, Any]:
+    window_start = utc_now() - timedelta(days=lookback_days)
+
+    cur.execute(
+        """
+        select min(ts) as first_ts, max(ts) as last_ts, count(*) as c
+        from signals
+        """
+    )
+    signal_history = cur.fetchone()
+    first_signal_ts = signal_history["first_ts"] if signal_history else None
+    last_signal_ts = signal_history["last_ts"] if signal_history else None
+    runtime_days = 0.0
+    if first_signal_ts is not None:
+        runtime_days = max(0.0, (utc_now() - first_signal_ts).total_seconds() / 86400.0)
+
+    cur.execute(
+        """
+        select count(*) as signal_count,
+               count(*) filter (where action in ('buy', 'sell')) as executable_signal_count
+        from signals
+        where ts >= %s
+        """,
+        (window_start,),
+    )
+    signal_window = cur.fetchone()
+    signal_count = int(signal_window["signal_count"])
+    executable_signal_count = int(signal_window["executable_signal_count"])
+
+    cur.execute(
+        """
+        select count(*) as total_orders,
+               count(*) filter (where status = 'filled') as filled_orders,
+               count(*) filter (where status = 'rejected') as rejected_orders
+        from orders
+        where created_at >= %s
+        """,
+        (window_start,),
+    )
+    order_window = cur.fetchone()
+    total_orders = int(order_window["total_orders"])
+    filled_orders = int(order_window["filled_orders"])
+    rejected_orders = int(order_window["rejected_orders"])
+    rejection_rate = (rejected_orders / total_orders) if total_orders > 0 else None
+
+    cur.execute(
+        """
+        select coalesce(sum(realized_pnl_usd), 0) as realized_pnl
+        from fills
+        where ts >= %s
+        """,
+        (window_start,),
+    )
+    realized_pnl_usd = float(cur.fetchone()["realized_pnl"])
+
+    cur.execute(
+        """
+        select count(*) filter (where o.side = 'sell') as sell_fills,
+               count(*) filter (where o.side = 'sell' and f.realized_pnl_usd > 0) as winning_sell_fills
+        from fills f
+        join orders o on o.order_id = f.order_id
+        where f.ts >= %s
+        """,
+        (window_start,),
+    )
+    win_stats = cur.fetchone()
+    sell_fills = int(win_stats["sell_fills"])
+    winning_sell_fills = int(win_stats["winning_sell_fills"])
+    win_rate = (winning_sell_fills / sell_fills) if sell_fills > 0 else None
+
+    cur.execute(
+        """
+        select realized_pnl_usd
+        from fills
+        where ts >= %s
+        order by ts asc
+        """,
+        (window_start,),
+    )
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown_usd = 0.0
+    for row in cur.fetchall():
+        cumulative += float(row["realized_pnl_usd"])
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = peak - cumulative
+        if drawdown > max_drawdown_usd:
+            max_drawdown_usd = drawdown
+    max_drawdown_pct = (max_drawdown_usd / PAPER_EQUITY_USD) if PAPER_EQUITY_USD > 0 else 1.0
+
+    uptime_window_days = max(0.01, min(float(lookback_days), runtime_days if runtime_days > 0 else float(lookback_days)))
+    expected_heartbeat_count = max(
+        1,
+        int((uptime_window_days * 24 * 60) / max(1, RECONCILE_HEARTBEAT_INTERVAL_MINUTES)),
+    )
+    cur.execute(
+        """
+        select count(*) as c
+        from ops_heartbeat_log
+        where component = 'reconcile_loop'
+          and status = 'ok'
+          and ts >= %s
+        """,
+        (window_start,),
+    )
+    reconcile_heartbeat_ok = int(cur.fetchone()["c"])
+    reconcile_uptime_pct = min(100.0, (reconcile_heartbeat_ok / expected_heartbeat_count) * 100.0)
+
+    cur.execute(
+        """
+        select count(*) as c
+        from risk_events
+        where ts >= now() - interval '24 hour'
+          and severity = 'critical'
+          and rule like 'ops_alert_%'
+        """
+    )
+    critical_ops_alerts_24h = int(cur.fetchone()["c"])
+
+    return {
+        "generated_at": utc_now().isoformat(),
+        "lookback_days": lookback_days,
+        "window_start": window_start.isoformat(),
+        "runtime_days": round(runtime_days, 2),
+        "first_signal_ts": first_signal_ts.isoformat() if first_signal_ts is not None else None,
+        "last_signal_ts": last_signal_ts.isoformat() if last_signal_ts is not None else None,
+        "signal_count": signal_count,
+        "executable_signal_count": executable_signal_count,
+        "total_orders": total_orders,
+        "filled_orders": filled_orders,
+        "rejected_orders": rejected_orders,
+        "rejection_rate": None if rejection_rate is None else round(rejection_rate, 4),
+        "realized_pnl_usd": round(realized_pnl_usd, 4),
+        "sell_fills": sell_fills,
+        "winning_sell_fills": winning_sell_fills,
+        "win_rate": None if win_rate is None else round(win_rate, 4),
+        "max_drawdown_usd": round(max_drawdown_usd, 4),
+        "max_drawdown_pct": round(max_drawdown_pct, 6),
+        "reconcile_heartbeat_ok_count": reconcile_heartbeat_ok,
+        "reconcile_heartbeat_expected_count": expected_heartbeat_count,
+        "reconcile_uptime_window_days": round(uptime_window_days, 2),
+        "reconcile_uptime_pct": round(reconcile_uptime_pct, 2),
+        "critical_ops_alerts_24h": critical_ops_alerts_24h,
+    }
+
+
+def evaluate_paper_go_no_go(scorecard: dict[str, Any]) -> dict[str, Any]:
+    def check_rule(key: str, operator: str, metric: float | None, target: float) -> dict[str, Any]:
+        passed = False
+        if metric is not None:
+            if operator == ">=":
+                passed = float(metric) >= float(target)
+            elif operator == "<=":
+                passed = float(metric) <= float(target)
+        return {
+            "key": key,
+            "operator": operator,
+            "metric": metric,
+            "target": target,
+            "passed": passed,
+        }
+
+    criteria = [
+        check_rule("runtime_days_min", ">=", float(scorecard["runtime_days"]), float(GO_NO_GO_MIN_DAYS)),
+        check_rule("filled_orders_min", ">=", float(scorecard["filled_orders"]), float(GO_NO_GO_MIN_EXECUTED_ORDERS)),
+        check_rule("win_rate_min", ">=", scorecard["win_rate"], float(GO_NO_GO_MIN_WIN_RATE)),
+        check_rule("max_drawdown_pct_max", "<=", float(scorecard["max_drawdown_pct"]), float(GO_NO_GO_MAX_DRAWDOWN_PCT)),
+        check_rule(
+            "realized_pnl_usd_min",
+            ">=",
+            float(scorecard["realized_pnl_usd"]),
+            float(GO_NO_GO_MIN_REALIZED_PNL_USD),
+        ),
+        check_rule("rejection_rate_max", "<=", scorecard["rejection_rate"], float(GO_NO_GO_MAX_REJECTION_RATE)),
+        check_rule(
+            "reconcile_uptime_pct_min",
+            ">=",
+            float(scorecard["reconcile_uptime_pct"]),
+            float(GO_NO_GO_MIN_RECONCILE_UPTIME_PCT),
+        ),
+        check_rule(
+            "critical_ops_alerts_24h_max",
+            "<=",
+            float(scorecard["critical_ops_alerts_24h"]),
+            float(GO_NO_GO_MAX_CRITICAL_ALERTS_24H),
+        ),
+    ]
+
+    failed = [c["key"] for c in criteria if not c["passed"]]
+    decision = "go" if not failed else "no_go"
+    return {
+        "decision": decision,
+        "go": decision == "go",
+        "failed_criteria": failed,
+        "criteria": criteria,
+    }
+
+
+def persist_paper_evaluation(
+    cur: psycopg.Cursor,
+    lookback_days: int,
+    scorecard: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> str:
+    evaluation_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        insert into paper_evaluations(evaluation_id, ts, lookback_days, decision, scorecard, criteria)
+        values(%s, now(), %s, %s, %s::jsonb, %s::jsonb)
+        """,
+        (
+            evaluation_id,
+            lookback_days,
+            evaluation["decision"],
+            json.dumps(scorecard),
+            json.dumps(evaluation["criteria"]),
+        ),
+    )
+
+    severity = "info" if evaluation["go"] else "high"
+    insert_risk_event(
+        cur,
+        rule="paper_go_no_go_evaluation",
+        severity=severity,
+        context={
+            "evaluation_id": evaluation_id,
+            "lookback_days": lookback_days,
+            "decision": evaluation["decision"],
+            "failed_criteria": evaluation["failed_criteria"],
+            "scorecard": scorecard,
+        },
+    )
+    return evaluation_id
 
 
 def latest_price(cur: psycopg.Cursor, symbol: str) -> float:
@@ -160,10 +837,25 @@ def evaluate_risk(cur: psycopg.Cursor, symbol: str, action: str, target_notional
     if action == "buy" and (current_notional + target_notional) > max_position_usd:
         reasons.append("max_position_pct_excedido")
 
-    cur.execute("select coalesce(sum(fee), 0) as fees from fills where ts::date = current_date")
-    daily_fees = float(cur.fetchone()["fees"])
-    if daily_fees >= DAILY_LOSS_LIMIT_USD:
+    kill_switch = get_kill_switch_state(cur)
+    if kill_switch["enabled"]:
+        reasons.append("kill_switch_activado")
+
+    daily_realized_pnl = get_daily_realized_pnl(cur)
+    daily_loss_usd = max(0.0, -daily_realized_pnl)
+    if daily_loss_usd >= DAILY_LOSS_LIMIT_USD:
         reasons.append("daily_loss_limit_excedido")
+        if not kill_switch["enabled"]:
+            auto_ctx = {
+                "daily_loss_usd": round(daily_loss_usd, 4),
+                "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+                "symbol": symbol,
+                "action": action,
+            }
+            set_kill_switch_state(cur, True, "auto_daily_loss_limit", auto_ctx)
+            insert_risk_event(cur, "kill_switch_auto_enabled_daily_loss", "critical", auto_ctx)
+            kill_switch = get_kill_switch_state(cur)
+            reasons.append("kill_switch_auto_activado")
 
     return {
         "approved": len(reasons) == 0,
@@ -171,7 +863,11 @@ def evaluate_risk(cur: psycopg.Cursor, symbol: str, action: str, target_notional
         "hourly_orders": hourly_orders,
         "current_notional_usd": round(current_notional, 2),
         "max_position_usd": round(max_position_usd, 2),
-        "daily_fees_usd": round(daily_fees, 4),
+        "daily_realized_pnl_usd": round(daily_realized_pnl, 4),
+        "daily_loss_usd": round(daily_loss_usd, 4),
+        "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+        "kill_switch_enabled": bool(kill_switch["enabled"]),
+        "kill_switch_reason": kill_switch["reason"],
     }
 
 
@@ -199,6 +895,22 @@ def update_position(cur: psycopg.Cursor, symbol: str, side: str, qty: float, pri
         """,
         (symbol, new_qty, new_avg),
     )
+
+
+def compute_realized_pnl(
+    side: str,
+    qty: float,
+    price: float,
+    fee: float,
+    position_qty: float,
+    position_avg: float,
+) -> float:
+    if side == "buy":
+        return -fee
+
+    closed_qty = min(max(position_qty, 0.0), qty)
+    gross_pnl = (price - position_avg) * closed_qty
+    return gross_pnl - fee
 
 
 def insert_risk_event(cur: psycopg.Cursor, rule: str, severity: str, context: dict[str, Any]) -> None:
@@ -331,8 +1043,8 @@ def electrum_rpc(method: str, params: list[Any] | None = None) -> Any:
 def health() -> dict[str, Any]:
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("select 1 as ok")
-            _ = cur.fetchone()
+            kill_switch = get_kill_switch_state(cur)
+            daily_realized_pnl = get_daily_realized_pnl(cur)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"DB no disponible: {exc}") from exc
 
@@ -344,6 +1056,9 @@ def health() -> dict[str, Any]:
         "exchange_symbol": EXCHANGE_SYMBOL,
         "feature_set_version": FEATURE_SET_VERSION,
         "electrum_rpc_enabled": ENABLE_ELECTRUM_RPC,
+        "kill_switch_enabled": bool(kill_switch["enabled"]),
+        "daily_realized_pnl_usd": round(daily_realized_pnl, 4),
+        "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
     }
 
 
@@ -571,6 +1286,119 @@ def risk_check(req: RiskCheckRequest) -> dict[str, Any]:
     return {"ok": True, "symbol": symbol, "action": action, **result}
 
 
+@app.get("/ops/summary")
+def ops_summary() -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        snapshot = get_ops_snapshot(cur)
+
+    return {
+        "ok": True,
+        "snapshot": snapshot,
+        "thresholds": {
+            "market_data_stale_minutes": MARKET_DATA_STALE_MINUTES,
+            "features_data_stale_minutes": FEATURES_DATA_STALE_MINUTES,
+            "reconcile_stale_minutes": RECONCILE_STALE_MINUTES,
+            "rejected_orders_1h_warn_threshold": REJECTED_ORDERS_1H_WARN_THRESHOLD,
+            "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+            "alert_cooldown_minutes": ALERT_COOLDOWN_MINUTES,
+        },
+    }
+
+
+@app.post("/alerts/evaluate")
+def alerts_evaluate(req: AlertEvaluateRequest) -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        snapshot = get_ops_snapshot(cur)
+        alerts = build_ops_alerts(snapshot)
+        persisted: list[dict[str, Any]] = []
+
+        if req.persist and alerts:
+            persisted = persist_ops_alerts(cur, alerts)
+            conn.commit()
+
+    critical_count = sum(1 for a in alerts if a["level"] == "critical")
+    warning_count = sum(1 for a in alerts if a["level"] == "warning")
+
+    return {
+        "ok": True,
+        "evaluated_at": utc_now().isoformat(),
+        "alert_count": len(alerts),
+        "critical_count": critical_count,
+        "warning_count": warning_count,
+        "persisted_count": len(persisted),
+        "alerts": alerts,
+        "snapshot": snapshot if req.include_snapshot else None,
+    }
+
+
+@app.get("/paper/scorecard")
+def paper_scorecard(lookback_days: int = PAPER_GO_NO_GO_LOOKBACK_DAYS) -> dict[str, Any]:
+    if lookback_days < 1 or lookback_days > 120:
+        raise HTTPException(status_code=400, detail="lookback_days debe estar entre 1 y 120")
+
+    with get_conn() as conn, conn.cursor() as cur:
+        scorecard = build_paper_scorecard(cur, lookback_days)
+
+    return {"ok": True, "scorecard": scorecard}
+
+
+@app.post("/paper/go-no-go")
+def paper_go_no_go(req: PaperGoNoGoRequest) -> dict[str, Any]:
+    if req.lookback_days < 1 or req.lookback_days > 120:
+        raise HTTPException(status_code=400, detail="lookback_days debe estar entre 1 y 120")
+
+    with get_conn() as conn, conn.cursor() as cur:
+        scorecard = build_paper_scorecard(cur, req.lookback_days)
+        evaluation = evaluate_paper_go_no_go(scorecard)
+        evaluation_id = None
+
+        if req.persist:
+            evaluation_id = persist_paper_evaluation(cur, req.lookback_days, scorecard, evaluation)
+            conn.commit()
+
+    return {
+        "ok": True,
+        "evaluation_id": evaluation_id,
+        "decision": evaluation["decision"],
+        "go": evaluation["go"],
+        "failed_criteria": evaluation["failed_criteria"],
+        "criteria": evaluation["criteria"],
+        "scorecard": scorecard if req.include_scorecard else None,
+    }
+
+
+@app.get("/risk/controls")
+def risk_controls() -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        kill_switch = get_kill_switch_state(cur)
+        daily_realized_pnl = get_daily_realized_pnl(cur)
+        daily_loss_usd = max(0.0, -daily_realized_pnl)
+
+    return {
+        "ok": True,
+        "kill_switch": kill_switch,
+        "daily_realized_pnl_usd": round(daily_realized_pnl, 4),
+        "daily_loss_usd": round(daily_loss_usd, 4),
+        "daily_loss_limit_usd": DAILY_LOSS_LIMIT_USD,
+    }
+
+
+@app.post("/risk/kill-switch")
+def set_kill_switch(req: KillSwitchSetRequest) -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        set_kill_switch_state(cur, req.enabled, req.reason, req.metadata)
+        insert_risk_event(
+            cur,
+            rule="kill_switch_manual_change",
+            severity="high" if req.enabled else "info",
+            context={"enabled": req.enabled, "reason": req.reason, "metadata": req.metadata},
+        )
+        kill_switch = get_kill_switch_state(cur)
+        conn.commit()
+
+    return {"ok": True, "kill_switch": kill_switch}
+
+
 @app.post("/execution/order")
 def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
     if TRADING_MODE not in {"paper", "live"}:
@@ -692,14 +1520,20 @@ def execution_order(req: ExecutionOrderRequest) -> dict[str, Any]:
             ),
         )
 
+        cur.execute("select qty, avg_entry from positions where symbol = %s", (symbol,))
+        position_before = cur.fetchone()
+        position_qty = float(position_before["qty"]) if position_before else 0.0
+        position_avg = float(position_before["avg_entry"]) if position_before else 0.0
+
         if order_status == "filled" and executed_qty > 0:
             fill_id = str(uuid.uuid4())
+            realized_pnl = compute_realized_pnl(side, executed_qty, fill_price, fee, position_qty, position_avg)
             cur.execute(
                 """
-                insert into fills(fill_id, order_id, price, qty, fee, fee_asset, notional_usd, ts)
-                values(%s, %s, %s, %s, %s, %s, %s, now())
+                insert into fills(fill_id, order_id, price, qty, fee, fee_asset, notional_usd, realized_pnl_usd, ts)
+                values(%s, %s, %s, %s, %s, %s, %s, %s, now())
                 """,
-                (fill_id, order_id, fill_price, executed_qty, fee, fee_asset, executed_qty * fill_price),
+                (fill_id, order_id, fill_price, executed_qty, fee, fee_asset, executed_qty * fill_price, realized_pnl),
             )
             update_position(cur, symbol, side, executed_qty, fill_price)
 
@@ -736,6 +1570,26 @@ def reconcile() -> dict[str, Any]:
 
         cur.execute("select count(*) as c from signals")
         signal_count = int(cur.fetchone()["c"])
+
+        upsert_heartbeat(
+            cur,
+            component="reconcile_loop",
+            status="ok",
+            payload={"signal_count": signal_count, "orders_by_status": by_status},
+        )
+        cur.execute(
+            """
+            insert into ops_heartbeat_log(id, component, ts, status, payload)
+            values(%s, %s, now(), %s, %s::jsonb)
+            """,
+            (
+                str(uuid.uuid4()),
+                "reconcile_loop",
+                "ok",
+                json.dumps({"signal_count": signal_count, "orders_by_status": by_status}),
+            ),
+        )
+        conn.commit()
 
     return {
         "ok": True,
