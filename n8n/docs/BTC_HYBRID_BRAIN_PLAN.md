@@ -62,6 +62,11 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
    - `HYBRID_FALLBACK_EDGE_MARGIN_BPS`
    - `FORECAST_MAX_ABS_CHANGE_BPS` (excluye outliers extremos en scorecards)
 
+Configuración operativa actual NO-KYC:
+- `SIGNAL_POLICY=mom_inverse`
+- `SIGNAL_MOM_THRESHOLD=0.0001`
+- `HYBRID_FALLBACK_POLICY=same_as_quant`
+
 ## Contrato Molbot
 
 El nodo IA espera respuesta JSON con:

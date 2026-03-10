@@ -32,6 +32,7 @@ SIGNAL_POLICY = os.getenv("SIGNAL_POLICY", "adaptive_edge").strip().lower()
 SIGNAL_ADAPT_LOOKBACK_DAYS = int(os.getenv("SIGNAL_ADAPT_LOOKBACK_DAYS", "14"))
 SIGNAL_ADAPT_MIN_SAMPLES = int(os.getenv("SIGNAL_ADAPT_MIN_SAMPLES", "40"))
 SIGNAL_ADAPT_EDGE_MARGIN_BPS = float(os.getenv("SIGNAL_ADAPT_EDGE_MARGIN_BPS", "0"))
+SIGNAL_MOM_THRESHOLD = float(os.getenv("SIGNAL_MOM_THRESHOLD", "0.0001"))
 GLOBAL_KILL_SWITCH_DEFAULT = os.getenv("GLOBAL_KILL_SWITCH_DEFAULT", "false").lower() == "true"
 MONITORED_SYMBOL = os.getenv("MONITORED_SYMBOL", "BTCUSD")
 MONITORED_TIMEFRAME = os.getenv("MONITORED_TIMEFRAME", "5m")
@@ -1901,7 +1902,17 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         elif sma_short < sma_long and momentum < 0:
             action = "sell"
 
-        action, policy_note = apply_signal_policy(cur, req.symbol, action)
+        if SIGNAL_POLICY == "mom_inverse":
+            threshold = max(0.0, SIGNAL_MOM_THRESHOLD)
+            if momentum >= threshold:
+                action = "sell"
+            elif momentum <= -threshold:
+                action = "buy"
+            else:
+                action = "hold"
+            policy_note = f"signal_policy_mom_inverse:threshold={threshold:.6f}"
+        else:
+            action, policy_note = apply_signal_policy(cur, req.symbol, action)
 
         trend_score = abs(sma_short - sma_long) / max(abs(sma_long), 1e-9)
         confidence = min(0.99, max(0.05, abs(momentum) * 10.0 + trend_score * 5.0))
@@ -2915,6 +2926,42 @@ def execution_intent(req: ExecutionIntentRequest) -> dict[str, Any]:
                 "reason": "accion_no_ejecutable",
                 "signal_id": req.signal_id,
                 "action": action,
+            }
+
+        cur.execute(
+            """
+            select intent_id, order_id, signal_id, symbol, side, target_notional_usd,
+                   reference_price, expected_qty, status, metadata
+            from external_execution_intents
+            where signal_id = %s
+            order by created_at desc
+            limit 1
+            """,
+            (req.signal_id,),
+        )
+        existing_intent = cur.fetchone()
+        if existing_intent:
+            existing_status = str(existing_intent["status"])
+            existing_metadata = dict(existing_intent["metadata"] or {})
+            receive_address = existing_metadata.get("receive_address")
+            reference_price = float(existing_intent["reference_price"] or 0.0)
+            expected_qty = float(existing_intent["expected_qty"] or 0.0)
+            target_notional = float(existing_intent["target_notional_usd"] or 0.0)
+            return {
+                "ok": True,
+                "created": False,
+                "status": existing_status,
+                "reason": "intent_exists_for_signal",
+                "intent_id": str(existing_intent["intent_id"]),
+                "order_id": str(existing_intent["order_id"]),
+                "signal_id": str(existing_intent["signal_id"]),
+                "symbol": str(existing_intent["symbol"]),
+                "side": str(existing_intent["side"]),
+                "target_notional_usd": round(target_notional, 4),
+                "reference_price": round(reference_price, 4),
+                "expected_qty": round(expected_qty, 8),
+                "receive_address_hint": receive_address,
+                "instructions": "Intent ya existente para signal_id; confirmar o reconciliar en /execution/intent/confirm",
             }
 
         risk = evaluate_risk(cur, symbol, action, target_notional)

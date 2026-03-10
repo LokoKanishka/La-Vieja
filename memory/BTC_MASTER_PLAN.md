@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 20:33 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 22:51 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -85,7 +85,7 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - `resolve_hybrid_action` permite `AI override` configurable (`HYBRID_ALLOW_AI_OVERRIDE=true`).
     - Scorecards `forecast/hybrid` ahora excluyen outliers extremos vía `FORECAST_MAX_ABS_CHANGE_BPS` (actual: 1000 bps).
     - `n8n/scripts/hybrid_backfill_shadow.sh` ahora usa fallback real por señal (ya no inyecta `pending_molbot` vacío).
-    - `n8n/scripts/no_kyc_lockdown.sh` deja modo híbrido consistente para NO-KYC: `adaptive_edge` + override + umbrales explícitos.
+    - `n8n/scripts/no_kyc_lockdown.sh` deja modo híbrido consistente para NO-KYC: fallback `same_as_quant` + override + umbrales explícitos.
     - Estado post-ajuste:
       - `hybrid.accuracy=0.2708`
       - `hybrid.avg_edge_bps=-3.9721`
@@ -96,29 +96,34 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - Carga histórica aplicada: `5979` velas `BTCUSD/5m` en venue `binance`.
     - Recalibración de forecasts históricos aplicada sobre velas alineadas.
     - `build_features`, `forecast/checkpoint`, `forecast/evaluate-due` y `hybrid/decision` ahora priorizan velas alineadas a 5m y prefieren venue `binance` ante empate temporal.
-    - Política quant adaptativa incorporada en `signal/evaluate` (`SIGNAL_POLICY=adaptive_edge`) y persistida en `.env.trading` + `no_kyc_lockdown.sh`.
+    - Política quant actual incorporada en `signal/evaluate`: `SIGNAL_POLICY=mom_inverse` con `SIGNAL_MOM_THRESHOLD=0.0001`.
     - Resultado operativo actual:
       - `decisions_with_outcome=81` (objetivo >=80 cumplido)
       - `outlier_excluded=0`
       - `hybrid.accuracy=0.321`
       - `hybrid.avg_edge_bps=-5.4664` (sigue negativo)
+  - Corrección operativa de intents (esta continuidad):
+    - `POST /execution/intent` ahora reutiliza intent existente por `signal_id` y evita apertura duplicada.
+    - Prueba directa validada: primera llamada `created=true`, segunda `created=false` con el mismo `intent_id`.
+    - Limpieza final aplicada: `open_intents=0`.
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
-Decision actual: `GO` (persistido en `paper_evaluations`).
+Decision actual: `NO_GO` (última evaluación persistida).
 
-Metricas del ultimo `GO`:
-- `runtime_days`: 20.0 (>= 14)
+Metricas de la ultima evaluación (`NO_GO`):
+- `runtime_days`: 20.86 (>= 14)
 - `filled_orders`: 42 (>= 20)
 - `win_rate`: 0.7000 (>= 0.45)
 - `realized_pnl_usd`: 9.3963 (>= 0)
-- `rejection_rate`: 0.0652 (<= 0.30)
-- `reconcile_uptime_pct`: 100.0 (>= 95)
+- `rejection_rate`: 0.0725 (<= 0.30)
+- `reconcile_uptime_pct`: 44.86 (< 95, criterio fallido)
 - `critical_ops_alerts_active`: 0 (<= 0)
 
 Nota de trazabilidad:
 - Para destrabar rapido la evaluacion se limpiaron rechazos contaminados de un replay defectuoso y se aplico una semilla paper controlada (`bootstrap_seed`) en la ventana de evaluacion.
 - Esto habilita avanzar a pre-live tecnico; no reemplaza validacion prolongada en paper con datos puramente organicos.
+- Hubo un `GO` previo histórico, pero el estado operativo vigente para decisión automática es el último `NO_GO`.
 
 ## 4) Plan Total Por Fases (Completo)
 
@@ -185,7 +190,7 @@ Orden de ejecucion inmediato:
 2. Ejecutar `n8n/scripts/zero_cost_guard.sh` y mantenerlo en verde.
 3. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
 4. Monitorear cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`.
-5. Seguir validando `adaptive_edge` en muestra forward para llevar `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
+5. Seguir validando `mom_inverse` (threshold 0.0001) en muestra forward para llevar `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
 6. Persistir estado y cambios en memoria n8n + git.
 
 Bloqueos de pre-live (irrelevantes mientras NO-KYC siga activo):
@@ -222,7 +227,7 @@ En cada sesion nueva:
 1. Confirmar estado base (debe seguir igual):
    - `failed=0` en `bash n8n/scripts/full_test_no_kyc.sh`
    - `open_intents=0`
-   - `HYBRID_FALLBACK_POLICY=adaptive_edge` activo en runtime
+   - `HYBRID_FALLBACK_POLICY=same_as_quant` activo en runtime
 2. Ejecutar validacion forward (sin tocar reglas) por al menos 24h:
    - mantener `BTC Hybrid Shadow 5m` y `BTC Hybrid Hourly Report 1h` activos
    - revisar cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`
