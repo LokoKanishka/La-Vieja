@@ -5,7 +5,8 @@ ROOT_DIR="/home/lucy/Escritorio/La Vieja"
 LOG_DIR="${ROOT_DIR}/n8n/logs"
 CRON_BEGIN="# BEGIN NO_KYC_CYCLE"
 CRON_END="# END NO_KYC_CYCLE"
-CRON_LINE='*/15 * * * * cd "/home/lucy/Escritorio/La Vieja" && /bin/sh n8n/scripts/no_kyc_cycle.sh >> n8n/logs/no_kyc_cycle.log 2>&1'
+CRON_LINE_BOOT='@reboot cd "/home/lucy/Escritorio/La Vieja" && /bin/bash n8n/scripts/no_kyc_guardian.sh --boot >> n8n/logs/no_kyc_guardian.log 2>&1'
+CRON_LINE_TICK='*/5 * * * * cd "/home/lucy/Escritorio/La Vieja" && /bin/bash n8n/scripts/no_kyc_guardian.sh >> n8n/logs/no_kyc_guardian.log 2>&1'
 
 mkdir -p "${LOG_DIR}"
 
@@ -23,10 +24,11 @@ awk -v b="${CRON_BEGIN}" -v e="${CRON_END}" '
 
 {
   echo "${CRON_BEGIN}"
-  echo "${CRON_LINE}"
+  echo "${CRON_LINE_BOOT}"
+  echo "${CRON_LINE_TICK}"
   echo "${CRON_END}"
 } >> "${TMP_FILE}"
 
 crontab "${TMP_FILE}"
-echo "Cron NO-KYC instalado: cada 15 minutos."
-echo "Log: ${LOG_DIR}/no_kyc_cycle.log"
+echo "Cron NO-KYC instalado: @reboot + watchdog cada 5 minutos."
+echo "Log: ${LOG_DIR}/no_kyc_guardian.log"

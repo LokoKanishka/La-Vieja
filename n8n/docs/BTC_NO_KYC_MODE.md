@@ -32,19 +32,25 @@ sh n8n/scripts/no_kyc_lockdown.sh
 sh n8n/scripts/no_kyc_cycle.sh
 ```
 
-3. Activar automatizacion cada 15 minutos (cron):
+3. Activar watchdog persistente (arranque + cada 5 minutos):
 
 ```bash
 sh n8n/scripts/no_kyc_cron_install.sh
 ```
 
-4. Ver intents abiertos:
+4. Ejecutar watchdog manual (recupera stack y corre ciclo sin depender de pantalla):
+
+```bash
+bash n8n/scripts/no_kyc_guardian.sh
+```
+
+5. Ver intents abiertos:
 
 ```bash
 sh n8n/scripts/no_kyc_intents_open.sh 20
 ```
 
-5. Confirmar resultado de un intent manual:
+6. Confirmar resultado de un intent manual:
 
 ```bash
 # filled
@@ -54,13 +60,13 @@ sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> filled <fill_price> <filled_
 sh n8n/scripts/no_kyc_intent_confirm.sh <intent_id> rejected
 ```
 
-6. Test completo NO-KYC (1 comando):
+7. Test completo NO-KYC (1 comando):
 
 ```bash
 bash n8n/scripts/full_test_no_kyc.sh
 ```
 
-7. Generar señal + checkpoint ahora (aviso operativo) y revisar score:
+8. Generar señal + checkpoint ahora (aviso operativo) y revisar score:
 
 ```bash
 # alerta inmediata (buy/sell/hold) + checkpoint a 10m
@@ -70,26 +76,26 @@ bash n8n/scripts/forecast_tick_5m.sh 10 5
 sh n8n/scripts/forecast_scorecard.sh 7 10 5m
 ```
 
-8. Verificacion estricta de modo cero pesos:
+9. Verificacion estricta de modo cero pesos:
 
 ```bash
 bash n8n/scripts/zero_cost_guard.sh
 ```
 
-9. Esqueleto híbrido (quant + IA) en modo sombra:
+10. Esqueleto híbrido (quant + IA) en modo sombra:
 
 ```bash
 bash n8n/scripts/hybrid_shadow_tick.sh
 sh n8n/scripts/hybrid_scorecard.sh 7 shadow 10 5m
 ```
 
-10. Backfill híbrido para construir muestra rápida:
+11. Backfill híbrido para construir muestra rápida:
 
 ```bash
 bash n8n/scripts/hybrid_backfill_shadow.sh 120
 ```
 
-11. Limpieza de intents abiertos (todo o por antigüedad):
+12. Limpieza de intents abiertos (todo o por antigüedad):
 
 ```bash
 # cerrar todos
@@ -99,7 +105,7 @@ bash n8n/scripts/no_kyc_intents_autocancel.sh --all
 bash n8n/scripts/no_kyc_intents_autocancel.sh 120
 ```
 
-12. Reporte/alerta híbrida (manual):
+13. Reporte/alerta híbrida (manual):
 
 ```bash
 bash n8n/scripts/hybrid_hourly_report.sh
@@ -120,8 +126,9 @@ bash n8n/scripts/hybrid_hourly_report.sh
 ## Uso recomendado
 
 - Ejecutar `no_kyc_lockdown.sh` al inicio de sesion.
-- Ejecutar `no_kyc_cycle.sh` en cada ronda operativa (o cron).
-- Ver logs del cron en `n8n/logs/no_kyc_cycle.log`.
+- Mantener watchdog con `no_kyc_cron_install.sh` (`@reboot` + cada 5 minutos).
+- Usar `no_kyc_guardian.sh` para recuperación manual rápida.
+- Ver logs del watchdog en `n8n/logs/no_kyc_guardian.log`.
 - Mantener seguimiento via:
   - `GET /ops/summary`
   - `POST /paper/go-no-go`

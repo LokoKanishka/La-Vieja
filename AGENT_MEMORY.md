@@ -70,6 +70,8 @@
   - `n8n/scripts/hybrid_backfill_shadow.sh`
   - `n8n/scripts/no_kyc_intents_autocancel.sh`
   - `n8n/scripts/hybrid_hourly_report.sh`
+  - `n8n/scripts/no_kyc_guardian.sh`
+  - `n8n/scripts/no_kyc_cron_install.sh`
 - Ajuste crítico reciente:
   - `POST /signal/evaluate` ahora evita duplicar señales por la misma vela y reutiliza `signal_id`.
   - `POST /execution/intent` ahora es idempotente por `signal_id` y reutiliza intent existente (evita duplicados abiertos).
@@ -81,6 +83,8 @@
   - `HYBRID_FALLBACK_POLICY` operativo en NO-KYC: `same_as_quant` (alineado al quant actual).
   - `build_paper_scorecard` ahora calcula `reconcile_uptime_pct` sobre el segmento continuo más reciente (`RECONCILE_CONTINUITY_GAP_MINUTES=30`) para evitar falsos NO_GO por cortes largos históricos.
   - `no_kyc_lockdown.sh` ahora espera `/health` antes de salir (elimina race condition en tests).
+  - `no_kyc_cycle.sh` soporta `NO_KYC_SKIP_LOCKDOWN=1` para ciclos frecuentes sin reinicio del servicio.
+  - watchdog persistente activado: cron `@reboot` + cada 5 minutos ejecutando `no_kyc_guardian.sh`.
   - Estado crítico actual validado:
     - `paper/go-no-go=GO`
     - `hybrid.resolved=104`, `hybrid.accuracy=0.4615`, `hybrid.avg_edge_bps=1.7855`
@@ -90,7 +94,7 @@
   - Mantener `full_test_no_kyc.sh` en `failed=0`.
   - Mantener `open_intents=0`.
   - Mantener estabilidad forward sin depender solo de replay histórico.
-  - Reducir `features_stale` (actual warning activo por antigüedad de features).
+  - Reducir `features_stale` (warning operativo activo por antigüedad de features).
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`

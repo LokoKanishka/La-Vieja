@@ -44,6 +44,8 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
   - Modo `NO-KYC` implementado:
     - `n8n/scripts/no_kyc_lockdown.sh`
     - `n8n/scripts/no_kyc_cycle.sh`
+    - `n8n/scripts/no_kyc_guardian.sh`
+    - `n8n/scripts/no_kyc_cron_install.sh`
     - `n8n/docs/BTC_NO_KYC_MODE.md`
   - Ejecucion externa NO-KYC por intents implementada:
     - tabla `external_execution_intents`
@@ -115,6 +117,10 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
       - `hybrid.accuracy=0.4615`
       - `hybrid.avg_edge_bps=1.7855`
       - `hybrid_alerts` sin críticos (`alert_count=0`)
+    - Continuidad sin pantalla/corte activada:
+      - `no_kyc_cycle.sh` soporta `NO_KYC_SKIP_LOCKDOWN=1` (evita reinicio innecesario en rondas frecuentes).
+      - cron operativo con `@reboot` + cada 5 minutos ejecutando `n8n/scripts/no_kyc_guardian.sh`.
+      - log de watchdog: `n8n/logs/no_kyc_guardian.log`.
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -197,7 +203,7 @@ Prioridad #1: programa híbrido `quant + IA` en modo `shadow` con cero pesos.
 Orden de ejecucion inmediato:
 1. Ejecutar `n8n/scripts/no_kyc_lockdown.sh` al inicio.
 2. Ejecutar `n8n/scripts/zero_cost_guard.sh` y mantenerlo en verde.
-3. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
+3. Mantener watchdog `n8n/scripts/no_kyc_guardian.sh` por cron (`@reboot` + cada 5m) y usar `no_kyc_cycle.sh` manual solo para control puntual.
 4. Monitorear cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`.
 5. Seguir validando `mom_inverse` (threshold 0.0005) en muestra forward para sostener `hybrid.avg_edge_bps > 0` y empujar `hybrid.accuracy`.
 6. Persistir estado y cambios en memoria n8n + git.
@@ -230,6 +236,8 @@ En cada sesion nueva:
 - Backfill híbrido: `bash n8n/scripts/hybrid_backfill_shadow.sh 120`
 - Autocancel intents: `bash n8n/scripts/no_kyc_intents_autocancel.sh --all`
 - Reporte híbrido horario manual: `bash n8n/scripts/hybrid_hourly_report.sh`
+- Instalar watchdog cron NO-KYC: `sh n8n/scripts/no_kyc_cron_install.sh`
+- Ejecutar watchdog manual: `bash n8n/scripts/no_kyc_guardian.sh`
 
 ## 8) Puntos Claros Para Retomar (Proxima Sesion)
 
@@ -237,6 +245,7 @@ En cada sesion nueva:
    - `failed=0` en `bash n8n/scripts/full_test_no_kyc.sh`
    - `open_intents=0`
    - `HYBRID_FALLBACK_POLICY=same_as_quant` activo en runtime
+   - cron NO-KYC activo con líneas `@reboot` y `*/5` para `no_kyc_guardian.sh`
 2. Ejecutar validacion forward (sin tocar reglas) por al menos 24h:
    - mantener `BTC Hybrid Shadow 5m` y `BTC Hybrid Hourly Report 1h` activos
    - revisar cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`
