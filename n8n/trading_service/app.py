@@ -504,6 +504,28 @@ def minutes_since(ts: datetime | None) -> float | None:
     return max(0.0, (utc_now() - ts.astimezone(timezone.utc)).total_seconds() / 60.0)
 
 
+def timeframe_to_seconds(timeframe: str | None) -> int | None:
+    tf = (timeframe or "").strip().lower()
+    if not tf:
+        return None
+    if tf.endswith("m") and tf[:-1].isdigit():
+        return max(1, int(tf[:-1])) * 60
+    if tf.endswith("h") and tf[:-1].isdigit():
+        return max(1, int(tf[:-1])) * 60 * 60
+    if tf.endswith("d") and tf[:-1].isdigit():
+        return max(1, int(tf[:-1])) * 24 * 60 * 60
+    return None
+
+
+def normalize_market_candle_ts(ts: datetime, timeframe: str | None) -> datetime:
+    bucket_seconds = timeframe_to_seconds(timeframe)
+    if not bucket_seconds:
+        return ts
+    ts_utc = ts.astimezone(timezone.utc) if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    floored_epoch = int(ts_utc.timestamp()) // bucket_seconds * bucket_seconds
+    return datetime.fromtimestamp(floored_epoch, tz=timezone.utc)
+
+
 def upsert_heartbeat(cur: psycopg.Cursor, component: str, status: str, payload: dict[str, Any]) -> None:
     cur.execute(
         """
@@ -1762,7 +1784,8 @@ def health() -> dict[str, Any]:
 
 @app.post("/ingest/market")
 def ingest_market(req: MarketIngestRequest) -> dict[str, Any]:
-    ts = req.ts or utc_now()
+    ts_raw = req.ts or utc_now()
+    ts = normalize_market_candle_ts(ts_raw, req.timeframe)
     o = float(req.open if req.open is not None else req.close)
     h = float(req.high if req.high is not None else req.close)
     l = float(req.low if req.low is not None else req.close)
@@ -1795,6 +1818,8 @@ def ingest_market(req: MarketIngestRequest) -> dict[str, Any]:
         "source": req.source,
         "timeframe": req.timeframe,
         "ts": ts.isoformat(),
+        "ts_input": ts_raw.isoformat(),
+        "ts_normalized": ts != ts_raw,
         "close": c,
     }
 

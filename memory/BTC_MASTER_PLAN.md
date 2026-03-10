@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 23:21 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-10 00:40 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -117,10 +117,14 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
       - `hybrid.accuracy=0.4615`
       - `hybrid.avg_edge_bps=1.7855`
       - `hybrid_alerts` sin críticos (`alert_count=0`)
-    - Continuidad sin pantalla/corte activada:
-      - `no_kyc_cycle.sh` soporta `NO_KYC_SKIP_LOCKDOWN=1` (evita reinicio innecesario en rondas frecuentes).
-      - cron operativo con `@reboot` + cada 5 minutos ejecutando `n8n/scripts/no_kyc_guardian.sh`.
-      - log de watchdog: `n8n/logs/no_kyc_guardian.log`.
+  - Continuidad sin pantalla/corte activada:
+    - `no_kyc_cycle.sh` soporta `NO_KYC_SKIP_LOCKDOWN=1` (evita reinicio innecesario en rondas frecuentes).
+    - cron operativo con `@reboot` + cada 5 minutos ejecutando `n8n/scripts/no_kyc_guardian.sh`.
+    - log de watchdog: `n8n/logs/no_kyc_guardian.log`.
+  - Endurecimiento anti-staleness aplicado (esta continuidad):
+    - `POST /ingest/market` normaliza `ts` por bucket de `timeframe` (5m/1h/1d) para evitar velas desalineadas.
+    - `no_kyc_cycle.sh` ahora fuerza `POST /features/build` al inicio de cada ciclo NO-KYC.
+    - Validación real: `POST /alerts/evaluate` con `alert_count=0` y sin `features_stale` en `full_test_no_kyc`.
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
@@ -246,6 +250,7 @@ En cada sesion nueva:
    - `open_intents=0`
    - `HYBRID_FALLBACK_POLICY=same_as_quant` activo en runtime
    - cron NO-KYC activo con líneas `@reboot` y `*/5` para `no_kyc_guardian.sh`
+   - `alerts/evaluate` sin `features_stale` (estado actual: `alert_count=0`)
 2. Ejecutar validacion forward (sin tocar reglas) por al menos 24h:
    - mantener `BTC Hybrid Shadow 5m` y `BTC Hybrid Hourly Report 1h` activos
    - revisar cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`
