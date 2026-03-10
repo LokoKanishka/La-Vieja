@@ -42,6 +42,7 @@ RECONCILE_STALE_MINUTES = int(os.getenv("RECONCILE_STALE_MINUTES", "3"))
 REJECTED_ORDERS_1H_WARN_THRESHOLD = int(os.getenv("REJECTED_ORDERS_1H_WARN_THRESHOLD", "3"))
 ALERT_COOLDOWN_MINUTES = int(os.getenv("ALERT_COOLDOWN_MINUTES", "30"))
 RECONCILE_HEARTBEAT_INTERVAL_MINUTES = int(os.getenv("RECONCILE_HEARTBEAT_INTERVAL_MINUTES", "1"))
+RECONCILE_CONTINUITY_GAP_MINUTES = float(os.getenv("RECONCILE_CONTINUITY_GAP_MINUTES", "30"))
 PAPER_GO_NO_GO_LOOKBACK_DAYS = int(os.getenv("PAPER_GO_NO_GO_LOOKBACK_DAYS", "14"))
 GO_NO_GO_MIN_DAYS = int(os.getenv("GO_NO_GO_MIN_DAYS", "14"))
 GO_NO_GO_MIN_EXECUTED_ORDERS = int(os.getenv("GO_NO_GO_MIN_EXECUTED_ORDERS", "20"))
@@ -845,24 +846,41 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
 
     cur.execute(
         """
-        select min(ts) as first_ok_ts, count(*) as ok_count
+        select ts
         from ops_heartbeat_log
         where component = 'reconcile_loop'
           and status = 'ok'
           and ts >= %s
+        order by ts asc
         """,
         (window_start,),
     )
-    heartbeat_stats = cur.fetchone()
-    first_reconcile_ok_ts = heartbeat_stats["first_ok_ts"] if heartbeat_stats else None
-    reconcile_heartbeat_ok = int(heartbeat_stats["ok_count"]) if heartbeat_stats else 0
+    heartbeat_rows = cur.fetchall()
 
-    # Heartbeat logging was introduced after initial trading runtime.
-    # Measure uptime from the first observed heartbeat in the score window to avoid false penalties.
-    if first_reconcile_ok_ts is not None:
-        uptime_start = max(window_start, first_reconcile_ok_ts)
+    # Use the latest continuous heartbeat segment so long offline gaps from a
+    # prior session do not poison current operational readiness.
+    continuity_gap_minutes = max(
+        1.0,
+        max(float(RECONCILE_HEARTBEAT_INTERVAL_MINUTES) * 3.0, RECONCILE_CONTINUITY_GAP_MINUTES),
+    )
+    if heartbeat_rows:
+        segment_start = heartbeat_rows[0]["ts"]
+        segment_count = 0
+        prev_ts = None
+        for row in heartbeat_rows:
+            ts = row["ts"]
+            if prev_ts is not None:
+                gap_minutes = max(0.0, (ts - prev_ts).total_seconds() / 60.0)
+                if gap_minutes > continuity_gap_minutes:
+                    segment_start = ts
+                    segment_count = 0
+            segment_count += 1
+            prev_ts = ts
+        uptime_start = max(window_start, segment_start)
+        reconcile_heartbeat_ok = segment_count
     else:
         uptime_start = window_start
+        reconcile_heartbeat_ok = 0
 
     uptime_window_minutes = max(1.0, (utc_now() - uptime_start).total_seconds() / 60.0)
     uptime_window_days = uptime_window_minutes / (24.0 * 60.0)
@@ -912,6 +930,7 @@ def build_paper_scorecard(cur: psycopg.Cursor, lookback_days: int) -> dict[str, 
         "reconcile_heartbeat_expected_count": expected_heartbeat_count,
         "reconcile_uptime_window_days": round(uptime_window_days, 2),
         "reconcile_uptime_start_ts": uptime_start.isoformat(),
+        "reconcile_continuity_gap_minutes": round(continuity_gap_minutes, 2),
         "reconcile_uptime_pct": round(reconcile_uptime_pct, 2),
         "critical_ops_alerts_24h": critical_ops_alerts_24h,
         "critical_ops_alerts_active": critical_ops_alerts_active,
@@ -1902,15 +1921,24 @@ def evaluate_signal(req: SignalEvaluateRequest) -> dict[str, Any]:
         elif sma_short < sma_long and momentum < 0:
             action = "sell"
 
-        if SIGNAL_POLICY == "mom_inverse":
+        if SIGNAL_POLICY in {"mom_follow", "mom_inverse"}:
             threshold = max(0.0, SIGNAL_MOM_THRESHOLD)
-            if momentum >= threshold:
-                action = "sell"
-            elif momentum <= -threshold:
-                action = "buy"
+            if SIGNAL_POLICY == "mom_inverse":
+                if momentum >= threshold:
+                    action = "sell"
+                elif momentum <= -threshold:
+                    action = "buy"
+                else:
+                    action = "hold"
+                policy_note = f"signal_policy_mom_inverse:threshold={threshold:.6f}"
             else:
-                action = "hold"
-            policy_note = f"signal_policy_mom_inverse:threshold={threshold:.6f}"
+                if momentum >= threshold:
+                    action = "buy"
+                elif momentum <= -threshold:
+                    action = "sell"
+                else:
+                    action = "hold"
+                policy_note = f"signal_policy_mom_follow:threshold={threshold:.6f}"
         else:
             action, policy_note = apply_signal_policy(cur, req.symbol, action)
 

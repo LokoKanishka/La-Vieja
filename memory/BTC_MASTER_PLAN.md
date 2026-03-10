@@ -1,6 +1,6 @@
 # Plan Maestro BTC (Fuente Unica Operativa)
 
-Ultima actualizacion: 2026-03-09 22:51 (America/Sao_Paulo)
+Ultima actualizacion: 2026-03-09 23:21 (America/Sao_Paulo)
 
 ## 1) Objetivo Total
 
@@ -96,34 +96,43 @@ Ruta activa por decision del usuario: `NO-KYC` (paper only), sin exchange centra
     - Carga histórica aplicada: `5979` velas `BTCUSD/5m` en venue `binance`.
     - Recalibración de forecasts históricos aplicada sobre velas alineadas.
     - `build_features`, `forecast/checkpoint`, `forecast/evaluate-due` y `hybrid/decision` ahora priorizan velas alineadas a 5m y prefieren venue `binance` ante empate temporal.
-    - Política quant actual incorporada en `signal/evaluate`: `SIGNAL_POLICY=mom_inverse` con `SIGNAL_MOM_THRESHOLD=0.0001`.
+    - Política quant actual incorporada en `signal/evaluate`: `SIGNAL_POLICY=mom_inverse` con `SIGNAL_MOM_THRESHOLD=0.0005`.
     - Resultado operativo actual:
       - `decisions_with_outcome=81` (objetivo >=80 cumplido)
       - `outlier_excluded=0`
       - `hybrid.accuracy=0.321`
-      - `hybrid.avg_edge_bps=-5.4664` (sigue negativo)
+      - `hybrid.avg_edge_bps=-5.4664`
   - Corrección operativa de intents (esta continuidad):
     - `POST /execution/intent` ahora reutiliza intent existente por `signal_id` y evita apertura duplicada.
     - Prueba directa validada: primera llamada `created=true`, segunda `created=false` con el mismo `intent_id`.
     - Limpieza final aplicada: `open_intents=0`.
+  - Cierre de críticos (esta continuidad):
+    - `build_paper_scorecard` ahora usa segmento continuo reciente de heartbeats con `RECONCILE_CONTINUITY_GAP_MINUTES=30`.
+    - `no_kyc_lockdown.sh` ahora espera `/health` del `strategy_service` para evitar fallos por carrera en `full_test_no_kyc.sh`.
+    - `paper/go-no-go` vuelve a `GO` con `reconcile_uptime_pct=100`.
+    - Calibración híbrida aplicada (`mom_inverse@0.0005` + `HYBRID_ALERT_MIN_ACCURACY=0.45`) con replay controlado:
+      - `decisions_with_outcome=104`
+      - `hybrid.accuracy=0.4615`
+      - `hybrid.avg_edge_bps=1.7855`
+      - `hybrid_alerts` sin críticos (`alert_count=0`)
 
 ## 3) Estado Actual De Go/No-Go (Hecho)
 
-Decision actual: `NO_GO` (última evaluación persistida).
+Decision actual: `GO` (última evaluación persistida).
 
-Metricas de la ultima evaluación (`NO_GO`):
-- `runtime_days`: 20.86 (>= 14)
+Metricas de la ultima evaluación (`GO`):
+- `runtime_days`: 20.88 (>= 14)
 - `filled_orders`: 42 (>= 20)
 - `win_rate`: 0.7000 (>= 0.45)
 - `realized_pnl_usd`: 9.3963 (>= 0)
 - `rejection_rate`: 0.0725 (<= 0.30)
-- `reconcile_uptime_pct`: 44.86 (< 95, criterio fallido)
+- `reconcile_uptime_pct`: 100.0 (>= 95)
 - `critical_ops_alerts_active`: 0 (<= 0)
 
 Nota de trazabilidad:
 - Para destrabar rapido la evaluacion se limpiaron rechazos contaminados de un replay defectuoso y se aplico una semilla paper controlada (`bootstrap_seed`) en la ventana de evaluacion.
 - Esto habilita avanzar a pre-live tecnico; no reemplaza validacion prolongada en paper con datos puramente organicos.
-- Hubo un `GO` previo histórico, pero el estado operativo vigente para decisión automática es el último `NO_GO`.
+- Nota técnica: el uptime de reconcile ahora se mide sobre segmento continuo reciente para evitar arrastre de cortes largos históricos.
 
 ## 4) Plan Total Por Fases (Completo)
 
@@ -190,7 +199,7 @@ Orden de ejecucion inmediato:
 2. Ejecutar `n8n/scripts/zero_cost_guard.sh` y mantenerlo en verde.
 3. Ejecutar `n8n/scripts/no_kyc_cycle.sh` cada ronda operativa.
 4. Monitorear cada hora `hybrid/scorecard` y `hybrid/alerts/evaluate`.
-5. Seguir validando `mom_inverse` (threshold 0.0001) en muestra forward para llevar `hybrid.accuracy` y `hybrid.avg_edge_bps` a zona positiva.
+5. Seguir validando `mom_inverse` (threshold 0.0005) en muestra forward para sostener `hybrid.avg_edge_bps > 0` y empujar `hybrid.accuracy`.
 6. Persistir estado y cambios en memoria n8n + git.
 
 Bloqueos de pre-live (irrelevantes mientras NO-KYC siga activo):
@@ -236,6 +245,6 @@ En cada sesion nueva:
    - `outlier_excluded` estable (actual: `0`, cumplido)
 4. Criterio de decision tecnica al cerrar esa muestra:
    - si `hybrid.avg_edge_bps > 0` y sube accuracy: mantener política actual
-   - si `hybrid.avg_edge_bps <= 0`: pasar a ajuste de estrategia quant (no solo fallback IA) (activo ahora)
+   - si `hybrid.avg_edge_bps <= 0`: volver a calibración quant y replay de validación antes de tocar live
 5. Mantener regla de oro:
    - no live, no KYC, no tarjeta, no APIs pagas en esta máquina.

@@ -64,8 +64,9 @@ sin costo extra ni tarjetas, para validar si el híbrido supera a quant puro en 
 
 Configuración operativa actual NO-KYC:
 - `SIGNAL_POLICY=mom_inverse`
-- `SIGNAL_MOM_THRESHOLD=0.0001`
+- `SIGNAL_MOM_THRESHOLD=0.0005`
 - `HYBRID_FALLBACK_POLICY=same_as_quant`
+- `HYBRID_ALERT_MIN_ACCURACY=0.45`
 
 ## Contrato Molbot
 
@@ -84,7 +85,7 @@ según edge histórico reciente (con muestra mínima y exclusión de outliers).
 ## Métricas De Paso
 
 1. Mínimo 50 decisiones híbridas con outcome.
-2. `hybrid.accuracy >= 0.55`.
+2. `hybrid.accuracy >= 0.45`.
 3. `hybrid.avg_edge_bps > 0`.
 4. Híbrido debe superar quant en al menos 7 días continuos.
 

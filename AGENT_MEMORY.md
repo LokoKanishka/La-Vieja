@@ -77,15 +77,20 @@
   - `docker-compose.trading.yml` ahora inyecta variables `forecast/hybrid` completas al `strategy_service`.
   - Scorecards `forecast/hybrid` excluyen outliers con `FORECAST_MAX_ABS_CHANGE_BPS`.
   - `n8n/scripts/backfill_market_binance_5m.sh` agrega velas históricas 5m desde Binance para cerrar huecos previos de mercado.
-  - `signal/evaluate` ahora soporta `SIGNAL_POLICY=mom_inverse` (umbral configurable `SIGNAL_MOM_THRESHOLD`).
+  - `signal/evaluate` ahora soporta `SIGNAL_POLICY=mom_inverse` con `SIGNAL_MOM_THRESHOLD=0.0005`.
   - `HYBRID_FALLBACK_POLICY` operativo en NO-KYC: `same_as_quant` (alineado al quant actual).
+  - `build_paper_scorecard` ahora calcula `reconcile_uptime_pct` sobre el segmento continuo más reciente (`RECONCILE_CONTINUITY_GAP_MINUTES=30`) para evitar falsos NO_GO por cortes largos históricos.
+  - `no_kyc_lockdown.sh` ahora espera `/health` antes de salir (elimina race condition en tests).
+  - Estado crítico actual validado:
+    - `paper/go-no-go=GO`
+    - `hybrid.resolved=104`, `hybrid.accuracy=0.4615`, `hybrid.avg_edge_bps=1.7855`
+    - `hybrid_alerts` sin críticos (`alert_count=0`)
   - Queries de features/forecast/hybrid priorizan velas alineadas a 5m y prefieren venue `binance` en empate temporal.
 - Pendientes críticos actuales para la próxima sesión:
   - Mantener `full_test_no_kyc.sh` en `failed=0`.
   - Mantener `open_intents=0`.
-  - Objetivo de muestra híbrida ya cumplido (`decisions_with_outcome=81`, `outlier_excluded=0`).
-  - `go/no-go` actual: `NO_GO` por `reconcile_uptime_pct` bajo umbral (44.86% vs 95%).
-  - Pendiente activo: convertir `hybrid.avg_edge_bps` a positivo (actual `-5.4664`) con ajuste quant adicional.
+  - Mantener estabilidad forward sin depender solo de replay histórico.
+  - Reducir `features_stale` (actual warning activo por antigüedad de features).
 - Al retomar:
   1. Verificar contenedor: `cd n8n && sudo docker compose ps`
   2. Si no esta arriba: `cd n8n && sudo docker compose up -d`
